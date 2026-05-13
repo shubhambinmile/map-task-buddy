@@ -183,11 +183,22 @@ export type Simulation = {
   totalDistance: number;
 };
 
-export function runSimulation(
-  totalUsers = 50,
-  totalTasks = 1000,
-  seed = 42,
-): Simulation {
+export type SimulationConfig = {
+  totalUsers?: number;
+  totalTasks?: number;
+  seed?: number;
+  center?: LatLng;
+  radiusKm?: number;
+};
+
+export function runSimulation(config: SimulationConfig = {}): Simulation {
+  const {
+    totalUsers = 50,
+    totalTasks = 1000,
+    seed = 42,
+    center = defaultOfficeLocation,
+    radiusKm = RADIUS_KM,
+  } = config;
   const rand = mulberry32(seed);
   const colors = makeColors(totalUsers);
   const users: User[] = Array.from({ length: totalUsers }, (_, i) => ({
@@ -201,23 +212,18 @@ export function runSimulation(
   }));
   const tasks: Task[] = Array.from({ length: totalTasks }, (_, i) => ({
     id: `T${i + 1}`,
-    location: generatePointInRadius(
-      officeLocation.lat,
-      officeLocation.lng,
-      RADIUS_KM,
-      rand,
-    ),
+    location: generatePointInRadius(center.lat, center.lng, radiusKm, rand),
   }));
 
   const withDist = tasks.map((t) => ({
     ...t,
-    centerDistance: haversine(officeLocation, t.location),
+    centerDistance: haversine(center, t.location),
   }));
   const sorted = [...withDist].sort(
     (a, b) => b.centerDistance - a.centerDistance,
   );
   assignTasks(users, sorted);
-  optimize(users);
+  optimize(users, center);
 
   const totalDistance = users.reduce((s, u) => s + u.totalRouteDistance, 0);
   return { users, tasks, fairness: fairnessDiff(users), totalDistance };
