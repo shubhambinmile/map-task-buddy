@@ -19,7 +19,8 @@ export type User = {
   color: string;
 };
 
-export const officeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
+export const defaultOfficeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
+export const officeLocation: LatLng = defaultOfficeLocation;
 export const RADIUS_KM = 50;
 const EARTH_RADIUS_KM = 6371;
 
@@ -64,12 +65,12 @@ function haversine(a: LatLng, b: LatLng) {
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function buildOptimizedRoute(tasks: Task[]) {
+function buildOptimizedRoute(tasks: Task[], center: LatLng) {
   if (tasks.length === 0)
     return { route: [] as Task[], totalDistance: 0, returnDistance: 0 };
   const remaining = [...tasks];
   const route: Task[] = [];
-  let cur: LatLng = officeLocation;
+  let cur: LatLng = center;
   let total = 0;
   while (remaining.length) {
     let bi = 0;
@@ -87,14 +88,14 @@ function buildOptimizedRoute(tasks: Task[]) {
     cur = next.location;
     remaining.splice(bi, 1);
   }
-  const returnDistance = haversine(cur, officeLocation);
+  const returnDistance = haversine(cur, center);
   total += returnDistance;
   return { route, totalDistance: total, returnDistance };
 }
 
-function buildAllRoutes(users: User[]) {
+function buildAllRoutes(users: User[], center: LatLng) {
   for (const u of users) {
-    const r = buildOptimizedRoute(u.assignedTasks);
+    const r = buildOptimizedRoute(u.assignedTasks, center);
     u.optimizedRoute = r.route;
     u.totalRouteDistance = r.totalDistance;
     u.returnDistance = r.returnDistance;
@@ -130,9 +131,9 @@ function assignTasks(users: User[], tasks: Task[]) {
   }
 }
 
-function optimize(users: User[], iterations = 80) {
+function optimize(users: User[], center: LatLng, iterations = 80) {
   for (let it = 0; it < iterations; it++) {
-    buildAllRoutes(users);
+    buildAllRoutes(users, center);
     const sorted = [...users].sort(
       (a, b) => b.totalRouteDistance - a.totalRouteDistance,
     );
@@ -144,8 +145,8 @@ function optimize(users: User[], iterations = 80) {
       for (const lt of light.assignedTasks) {
         const ha = heavy.assignedTasks.map((t) => (t.id === ht.id ? lt : t));
         const la = light.assignedTasks.map((t) => (t.id === lt.id ? ht : t));
-        const hr = buildOptimizedRoute(ha);
-        const lr = buildOptimizedRoute(la);
+        const hr = buildOptimizedRoute(ha, center);
+        const lr = buildOptimizedRoute(la, center);
         const totals = users.map((u) =>
           u === heavy
             ? hr.totalDistance
@@ -164,7 +165,7 @@ function optimize(users: User[], iterations = 80) {
     }
     if (!improved) break;
   }
-  buildAllRoutes(users);
+  buildAllRoutes(users, center);
 }
 
 // Distinct HSL colors for N users
@@ -182,11 +183,22 @@ export type Simulation = {
   totalDistance: number;
 };
 
-export function runSimulation(
-  totalUsers = 50,
-  totalTasks = 1000,
-  seed = 42,
-): Simulation {
+export type SimulationConfig = {
+  totalUsers?: number;
+  totalTasks?: number;
+  seed?: number;
+  center?: LatLng;
+  radiusKm?: number;
+};
+
+export function runSimulation(config: SimulationConfig = {}): Simulation {
+  const {
+    totalUsers = 50,
+    totalTasks = 1000,
+    seed = 42,
+    center = defaultOfficeLocation,
+    radiusKm = RADIUS_KM,
+  } = config;
   const rand = mulberry32(seed);
   const colors = makeColors(totalUsers);
   const users: User[] = Array.from({ length: totalUsers }, (_, i) => ({
@@ -200,23 +212,18 @@ export function runSimulation(
   }));
   const tasks: Task[] = Array.from({ length: totalTasks }, (_, i) => ({
     id: `T${i + 1}`,
-    location: generatePointInRadius(
-      officeLocation.lat,
-      officeLocation.lng,
-      RADIUS_KM,
-      rand,
-    ),
+    location: generatePointInRadius(center.lat, center.lng, radiusKm, rand),
   }));
 
   const withDist = tasks.map((t) => ({
     ...t,
-    centerDistance: haversine(officeLocation, t.location),
+    centerDistance: haversine(center, t.location),
   }));
   const sorted = [...withDist].sort(
     (a, b) => b.centerDistance - a.centerDistance,
   );
   assignTasks(users, sorted);
-  optimize(users);
+  optimize(users, center);
 
   const totalDistance = users.reduce((s, u) => s + u.totalRouteDistance, 0);
   return { users, tasks, fairness: fairnessDiff(users), totalDistance };
