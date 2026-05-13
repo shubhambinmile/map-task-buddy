@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { officeLocation, type Simulation, type User } from "@/lib/routing";
+import type { LatLng, Simulation, User } from "@/lib/routing";
 
 type LeafletMods = {
   MapContainer: any;
@@ -8,17 +8,42 @@ type LeafletMods = {
   Popup: any;
   Polyline: any;
   CircleMarker: any;
+  Circle: any;
   Tooltip: any;
+  useMapEvents: any;
   icon: any;
   divIcon: any;
 };
 
+function ClickHandler({
+  useMapEvents,
+  onPick,
+}: {
+  useMapEvents: any;
+  onPick?: (c: LatLng) => void;
+}) {
+  useMapEvents({
+    click(e: any) {
+      onPick?.({ lat: e.latlng.lat, lng: e.latlng.lng });
+    },
+  });
+  return null;
+}
+
 export function LocationsMap({
   simulation,
   visibleUsers,
+  center,
+  radiusKm,
+  pickMode,
+  onPickCenter,
 }: {
   simulation: Simulation;
   visibleUsers: Set<string>;
+  center: LatLng;
+  radiusKm: number;
+  pickMode?: boolean;
+  onPickCenter?: (c: LatLng) => void;
 }) {
   const [L, setL] = useState<LeafletMods | null>(null);
 
@@ -36,7 +61,9 @@ export function LocationsMap({
         Popup: rl.Popup,
         Polyline: rl.Polyline,
         CircleMarker: rl.CircleMarker,
+        Circle: rl.Circle,
         Tooltip: rl.Tooltip,
+        useMapEvents: rl.useMapEvents,
         icon: lf.icon,
         divIcon: lf.divIcon,
       });
@@ -77,31 +104,52 @@ export function LocationsMap({
     Popup,
     Polyline,
     CircleMarker,
+    Circle,
     Tooltip,
+    useMapEvents,
   } = L;
 
   const visible = simulation.users.filter((u) => visibleUsers.has(u.id));
 
   return (
     <MapContainer
-      center={[officeLocation.lat, officeLocation.lng]}
+      center={[center.lat, center.lng]}
       zoom={9}
       preferCanvas
-      style={{ height: "100%", width: "100%" }}
+      style={{
+        height: "100%",
+        width: "100%",
+        cursor: pickMode ? "crosshair" : undefined,
+      }}
     >
       <TileLayer
-        attribution='&copy; OpenStreetMap'
+        attribution="&copy; OpenStreetMap"
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
 
-      {/* Route polylines */}
+      {pickMode && (
+        <ClickHandler useMapEvents={useMapEvents} onPick={onPickCenter} />
+      )}
+
+      <Circle
+        center={[center.lat, center.lng]}
+        radius={radiusKm * 1000}
+        pathOptions={{
+          color: "hsl(var(--foreground))",
+          weight: 1,
+          opacity: 0.4,
+          fillOpacity: 0.04,
+          dashArray: "4 4",
+        }}
+      />
+
       {visible.map((u: User) => {
         const pts: [number, number][] = [
-          [officeLocation.lat, officeLocation.lng],
+          [center.lat, center.lng],
           ...u.optimizedRoute.map(
             (t) => [t.location.lat, t.location.lng] as [number, number],
           ),
-          [officeLocation.lat, officeLocation.lng],
+          [center.lat, center.lng],
         ];
         return (
           <Polyline
@@ -112,7 +160,6 @@ export function LocationsMap({
         );
       })}
 
-      {/* Task markers per user */}
       {visible.map((u: User) =>
         u.optimizedRoute.map((t, idx) => (
           <CircleMarker
@@ -144,16 +191,12 @@ export function LocationsMap({
         )),
       )}
 
-      {/* Center */}
-      <Marker
-        position={[officeLocation.lat, officeLocation.lng]}
-        icon={centerIcon}
-      >
+      <Marker position={[center.lat, center.lng]} icon={centerIcon}>
         <Popup>
           <div className="text-xs">
             <div className="font-semibold">Center / Origin</div>
             <div>
-              {officeLocation.lat.toFixed(4)}, {officeLocation.lng.toFixed(4)}
+              {center.lat.toFixed(4)}, {center.lng.toFixed(4)}
             </div>
           </div>
         </Popup>
