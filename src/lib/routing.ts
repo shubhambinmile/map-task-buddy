@@ -19,7 +19,8 @@ export type User = {
   color: string;
 };
 
-export const officeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
+export const defaultOfficeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
+export const officeLocation: LatLng = defaultOfficeLocation;
 export const RADIUS_KM = 50;
 const EARTH_RADIUS_KM = 6371;
 
