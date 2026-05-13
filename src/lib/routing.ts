@@ -131,9 +131,9 @@ function assignTasks(users: User[], tasks: Task[]) {
   }
 }
 
-function optimize(users: User[], iterations = 80) {
+function optimize(users: User[], center: LatLng, iterations = 80) {
   for (let it = 0; it < iterations; it++) {
-    buildAllRoutes(users);
+    buildAllRoutes(users, center);
     const sorted = [...users].sort(
       (a, b) => b.totalRouteDistance - a.totalRouteDistance,
     );
@@ -145,8 +145,8 @@ function optimize(users: User[], iterations = 80) {
       for (const lt of light.assignedTasks) {
         const ha = heavy.assignedTasks.map((t) => (t.id === ht.id ? lt : t));
         const la = light.assignedTasks.map((t) => (t.id === lt.id ? ht : t));
-        const hr = buildOptimizedRoute(ha);
-        const lr = buildOptimizedRoute(la);
+        const hr = buildOptimizedRoute(ha, center);
+        const lr = buildOptimizedRoute(la, center);
         const totals = users.map((u) =>
           u === heavy
             ? hr.totalDistance
@@ -165,7 +165,7 @@ function optimize(users: User[], iterations = 80) {
     }
     if (!improved) break;
   }
-  buildAllRoutes(users);
+  buildAllRoutes(users, center);
 }
 
 // Distinct HSL colors for N users
