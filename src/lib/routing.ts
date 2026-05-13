@@ -65,12 +65,12 @@ function haversine(a: LatLng, b: LatLng) {
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function buildOptimizedRoute(tasks: Task[]) {
+function buildOptimizedRoute(tasks: Task[], center: LatLng) {
   if (tasks.length === 0)
     return { route: [] as Task[], totalDistance: 0, returnDistance: 0 };
   const remaining = [...tasks];
   const route: Task[] = [];
-  let cur: LatLng = officeLocation;
+  let cur: LatLng = center;
   let total = 0;
   while (remaining.length) {
     let bi = 0;
@@ -88,14 +88,14 @@ function buildOptimizedRoute(tasks: Task[]) {
     cur = next.location;
     remaining.splice(bi, 1);
   }
-  const returnDistance = haversine(cur, officeLocation);
+  const returnDistance = haversine(cur, center);
   total += returnDistance;
   return { route, totalDistance: total, returnDistance };
 }
 
-function buildAllRoutes(users: User[]) {
+function buildAllRoutes(users: User[], center: LatLng) {
   for (const u of users) {
-    const r = buildOptimizedRoute(u.assignedTasks);
+    const r = buildOptimizedRoute(u.assignedTasks, center);
     u.optimizedRoute = r.route;
     u.totalRouteDistance = r.totalDistance;
     u.returnDistance = r.returnDistance;
