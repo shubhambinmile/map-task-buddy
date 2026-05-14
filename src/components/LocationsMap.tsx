@@ -215,20 +215,23 @@ export function LocationsMap({
           .filter((t) => visibleCategories.has(t.category))
           .map((t, idx) => {
             const cfg = CATEGORY_CONFIG[t.category];
+            const isBorder = !!t.isBorder && showBorderTasks;
             return (
               <CircleMarker
                 key={`${u.id}-${t.id}`}
                 center={[t.location.lat, t.location.lng]}
-                radius={radiusByCat[t.category]}
+                radius={radiusByCat[t.category] + (isBorder ? 2 : 0)}
                 pathOptions={{
-                  color: u.color,
+                  color: isBorder ? "#f97316" : u.color,
                   fillColor: cfg.color,
                   fillOpacity: 0.95,
-                  weight: 1.5,
+                  weight: isBorder ? 2.5 : 1.5,
+                  dashArray: isBorder ? "2 2" : undefined,
                 }}
               >
                 <Tooltip direction="top" offset={[0, -4]} opacity={0.9}>
                   {u.id} · #{idx + 1} · {t.id} · {t.category}
+                  {isBorder ? " · border" : ""}
                 </Tooltip>
                 <Popup>
                   <div className="text-xs leading-relaxed">
@@ -240,6 +243,11 @@ export function LocationsMap({
                     <div>Stop #: {idx + 1}</div>
                     <div>Leg: {(t.travelDistance ?? 0).toFixed(2)} km</div>
                     <div>From center: {t.centerDistance.toFixed(2)} km</div>
+                    {t.isBorder && (
+                      <div className="font-semibold text-orange-600">
+                        Border task (territory edge)
+                      </div>
+                    )}
                     <div>
                       {t.location.lat.toFixed(4)}, {t.location.lng.toFixed(4)}
                     </div>
@@ -249,6 +257,55 @@ export function LocationsMap({
             );
           }),
       )}
+
+      {/* Territory spread circle */}
+      {showSpread &&
+        visible.map((u: User) =>
+          u.assignedTasks.length >= 2 ? (
+            <Circle
+              key={`spread-${u.id}`}
+              center={[u.centroid.lat, u.centroid.lng]}
+              radius={u.avgSpread * 1000}
+              pathOptions={{
+                color: u.color,
+                weight: 1,
+                opacity: 0.5,
+                fillOpacity: 0.04,
+                dashArray: "2 6",
+              }}
+            />
+          ) : null,
+        )}
+
+      {/* Overlap hotspots */}
+      {showOverlap &&
+        simulation.overlapHotspots.map((h, i) => {
+          if (!visibleUsers.has(h.a.userId) || !visibleUsers.has(h.b.userId))
+            return null;
+          const mid: [number, number] = [
+            (h.a.location.lat + h.b.location.lat) / 2,
+            (h.a.location.lng + h.b.location.lng) / 2,
+          ];
+          return (
+            <CircleMarker
+              key={`ov-${i}`}
+              center={mid}
+              radius={9}
+              pathOptions={{
+                color: "#ef4444",
+                weight: 2,
+                fillColor: "#ef4444",
+                fillOpacity: 0.18,
+                dashArray: "3 3",
+              }}
+            >
+              <Tooltip direction="top" offset={[0, -6]}>
+                Overlap · {h.a.userId}·{h.a.taskId} ↔ {h.b.userId}·{h.b.taskId}{" "}
+                · {h.distanceKm.toFixed(2)} km
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
 
       {/* Stop numbers (only when soloing few users to avoid clutter) */}
       {showStopNumbers &&
