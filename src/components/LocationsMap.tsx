@@ -43,6 +43,9 @@ export function LocationsMap({
   showRoutes,
   showTerritories,
   showStopNumbers,
+  showOverlap,
+  showBorderTasks,
+  showSpread,
   center,
   radiusKm,
   pickMode,
@@ -54,6 +57,9 @@ export function LocationsMap({
   showRoutes: boolean;
   showTerritories: boolean;
   showStopNumbers: boolean;
+  showOverlap: boolean;
+  showBorderTasks: boolean;
+  showSpread: boolean;
   center: LatLng;
   radiusKm: number;
   pickMode?: boolean;
