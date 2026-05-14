@@ -1,104 +1,115 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LocationsMap } from "@/components/LocationsMap";
 import {
+  CATEGORY_CONFIG,
   defaultOfficeLocation,
   RADIUS_KM,
   runSimulation,
+  type Category,
   type LatLng,
 } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 
 export const Route = createFileRoute("/")({
   component: Index,
   head: () => ({
     meta: [
-      { title: "Fair Vehicle Routing — Map" },
+      { title: "V6 Workforce Routing — Dispatch Dashboard" },
       {
         name: "description",
         content:
-          "Interactive visualization of a fair task allocation and vehicle routing algorithm.",
+          "Interactive map dashboard for the V6 weighted geo routing & territory optimization engine.",
       },
     ],
   }),
 });
 
+const ALL_CATS: Category[] = ["A", "B", "C", "D"];
+
 function Index() {
-  const [totalUsers, setTotalUsers] = useState(20);
-  const [totalTasks, setTotalTasks] = useState(300);
+  const [totalUsers, setTotalUsers] = useState(15);
+  const [totalTasks, setTotalTasks] = useState(250);
   const [radiusKm, setRadiusKm] = useState(RADIUS_KM);
   const [center, setCenter] = useState<LatLng>(defaultOfficeLocation);
   const [pickMode, setPickMode] = useState(false);
+  const [seed, setSeed] = useState(42);
 
-  // Inputs that drive the simulation only after "Run"
   const [config, setConfig] = useState({
     totalUsers,
     totalTasks,
     radiusKm,
     center,
-    seed: 42,
+    seed,
   });
 
-  const simulation = useMemo(
-    () =>
-      runSimulation({
-        totalUsers: config.totalUsers,
-        totalTasks: config.totalTasks,
-        radiusKm: config.radiusKm,
-        center: config.center,
-        seed: config.seed,
-      }),
-    [config],
-  );
+  const simulation = useMemo(() => runSimulation(config), [config]);
 
   const [visible, setVisible] = useState<Set<string>>(
     () => new Set(simulation.users.map((u) => u.id)),
   );
+  const [cats, setCats] = useState<Set<Category>>(() => new Set(ALL_CATS));
+  const [showRoutes, setShowRoutes] = useState(true);
+  const [showTerritories, setShowTerritories] = useState(true);
+  const [showStopNumbers, setShowStopNumbers] = useState(true);
 
-  // Reset visibility when simulation changes
-  const simIds = simulation.users.map((u) => u.id).join(",");
-  useMemo(() => {
+  // Reset visibility when simulation users change
+  const userIds = simulation.users.map((u) => u.id).join(",");
+  useEffect(() => {
     setVisible(new Set(simulation.users.map((u) => u.id)));
-  }, [simIds]);
+  }, [userIds]);
 
-  const toggle = (id: string) => {
+  const toggleUser = (id: string) =>
     setVisible((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
     });
-  };
+  const toggleCat = (c: Category) =>
+    setCats((prev) => {
+      const n = new Set(prev);
+      n.has(c) ? n.delete(c) : n.add(c);
+      return n;
+    });
+  const soloUser = (id: string) => setVisible(new Set([id]));
 
   const distances = simulation.users.map((u) => u.totalRouteDistance);
+  const workloads = simulation.users.map((u) => u.totalWorkload);
   const minD = Math.min(...distances);
   const maxD = Math.max(...distances);
   const avgD = distances.reduce((s, d) => s + d, 0) / distances.length;
+  const minW = Math.min(...workloads);
+  const maxW = Math.max(...workloads);
+  const avgW = workloads.reduce((s, d) => s + d, 0) / workloads.length;
 
   const run = () =>
-    setConfig({ totalUsers, totalTasks, radiusKm, center, seed: 42 });
+    setConfig({ totalUsers, totalTasks, radiusKm, center, seed });
 
-  const handlePickCenter = (c: LatLng) => {
-    setCenter(c);
-    setPickMode(false);
+  const newSeed = () => {
+    const s = Math.floor(Math.random() * 1_000_000);
+    setSeed(s);
+    setConfig({ totalUsers, totalTasks, radiusKm, center, seed: s });
   };
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/40 px-6 py-3 backdrop-blur">
         <div>
-          <h1 className="text-xl font-semibold">Fair Vehicle Routing — Map</h1>
+          <h1 className="text-xl font-semibold tracking-tight">
+            V6 Workforce Routing — Dispatch Dashboard
+          </h1>
           <p className="text-xs text-muted-foreground">
             {simulation.users.length} users · {simulation.tasks.length} tasks ·
-            fairness Δ {simulation.fairness.toFixed(1)} km · total{" "}
-            {simulation.totalDistance.toFixed(0)} km · avg {avgD.toFixed(1)} km
-            (min {minD.toFixed(1)} / max {maxD.toFixed(1)})
+            workload {simulation.totalWorkload.toFixed(1)} · fairness Δ{" "}
+            {simulation.fairness.toFixed(1)} · total{" "}
+            {simulation.totalDistance.toFixed(0)} km
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -115,11 +126,17 @@ function Index() {
           >
             Hide all
           </Button>
+          <Button size="sm" variant="outline" onClick={newSeed}>
+            New tasks
+          </Button>
+          <Button size="sm" onClick={run}>
+            Recalculate
+          </Button>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-r border-border">
+        <aside className="flex w-[340px] shrink-0 flex-col overflow-hidden border-r border-border bg-card/20">
           {/* Controls */}
           <div className="space-y-3 border-b border-border p-3">
             <div className="grid grid-cols-2 gap-2">
@@ -196,11 +213,83 @@ function Index() {
             </div>
 
             <Button size="sm" className="w-full" onClick={run}>
-              Run simulation
+              Run optimization
             </Button>
           </div>
 
-          {/* Users */}
+          {/* Layer toggles */}
+          <div className="space-y-2 border-b border-border p-3 text-xs">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Routes</Label>
+              <Switch checked={showRoutes} onCheckedChange={setShowRoutes} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Territories</Label>
+              <Switch
+                checked={showTerritories}
+                onCheckedChange={setShowTerritories}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">
+                Stop numbers
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  (≤3 users)
+                </span>
+              </Label>
+              <Switch
+                checked={showStopNumbers}
+                onCheckedChange={setShowStopNumbers}
+              />
+            </div>
+          </div>
+
+          {/* Category filters / legend */}
+          <div className="border-b border-border p-3">
+            <div className="mb-2 text-xs font-medium">Categories</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {ALL_CATS.map((c) => {
+                const cfg = CATEGORY_CONFIG[c];
+                const on = cats.has(c);
+                return (
+                  <button
+                    key={c}
+                    onClick={() => toggleCat(c)}
+                    className={`flex items-center justify-between rounded border border-border px-2 py-1 text-xs transition ${
+                      on ? "bg-accent/40" : "opacity-40"
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ background: cfg.color }}
+                      />
+                      <span className="font-medium">{c}</span>
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {cfg.avgHours}h ×{cfg.weight}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Global metrics */}
+          <div className="grid grid-cols-2 gap-2 border-b border-border p-3 text-xs">
+            <Stat label="Avg distance" value={`${avgD.toFixed(1)} km`} />
+            <Stat label="Avg workload" value={avgW.toFixed(2)} />
+            <Stat
+              label="Distance range"
+              value={`${minD.toFixed(0)}–${maxD.toFixed(0)}`}
+            />
+            <Stat
+              label="Workload range"
+              value={`${minW.toFixed(1)}–${maxW.toFixed(1)}`}
+            />
+          </div>
+
+          {/* Users table */}
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-card">
@@ -208,7 +297,9 @@ function Index() {
                   <th className="px-2 py-2"></th>
                   <th className="px-2 py-2">User</th>
                   <th className="px-2 py-2 text-right">Jobs</th>
-                  <th className="px-2 py-2 text-right">Dist (km)</th>
+                  <th className="px-2 py-2 text-right">Load</th>
+                  <th className="px-2 py-2 text-right">Km</th>
+                  <th className="px-2 py-2"></th>
                 </tr>
               </thead>
               <tbody>
@@ -217,23 +308,42 @@ function Index() {
                   return (
                     <tr
                       key={u.id}
-                      onClick={() => toggle(u.id)}
-                      className={`cursor-pointer border-b border-border/60 hover:bg-accent/50 ${
+                      className={`border-b border-border/60 ${
                         on ? "" : "opacity-40"
-                      }`}
+                      } hover:bg-accent/40`}
                     >
-                      <td className="px-2 py-1.5">
+                      <td
+                        className="cursor-pointer px-2 py-1.5"
+                        onClick={() => toggleUser(u.id)}
+                      >
                         <span
                           className="inline-block h-3 w-3 rounded-sm"
                           style={{ background: u.color }}
                         />
                       </td>
-                      <td className="px-2 py-1.5 font-medium">{u.id}</td>
+                      <td
+                        className="cursor-pointer px-2 py-1.5 font-medium"
+                        onClick={() => toggleUser(u.id)}
+                      >
+                        {u.id}
+                      </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {u.assignedTasks.length}
                       </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
+                        {u.totalWorkload.toFixed(1)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
                         {u.totalRouteDistance.toFixed(1)}
+                      </td>
+                      <td className="px-1 py-1">
+                        <button
+                          onClick={() => soloUser(u.id)}
+                          className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-accent"
+                          title="Solo this user"
+                        >
+                          solo
+                        </button>
                       </td>
                     </tr>
                   );
@@ -252,13 +362,31 @@ function Index() {
           <LocationsMap
             simulation={simulation}
             visibleUsers={visible}
+            visibleCategories={cats}
+            showRoutes={showRoutes}
+            showTerritories={showTerritories}
+            showStopNumbers={showStopNumbers}
             center={config.center}
             radiusKm={config.radiusKm}
             pickMode={pickMode}
-            onPickCenter={handlePickCenter}
+            onPickCenter={(c) => {
+              setCenter(c);
+              setPickMode(false);
+            }}
           />
         </main>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-card/40 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
