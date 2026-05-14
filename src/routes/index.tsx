@@ -7,6 +7,7 @@ import {
   RADIUS_KM,
   runSimulation,
   type Category,
+  type FairnessReport,
   type LatLng,
 } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
@@ -19,11 +20,11 @@ export const Route = createFileRoute("/")({
   component: Index,
   head: () => ({
     meta: [
-      { title: "V6 Workforce Routing — Dispatch Dashboard" },
+      { title: "V7 Territory Routing — Fairness Dashboard" },
       {
         name: "description",
         content:
-          "Interactive map dashboard for the V6 weighted geo routing & territory optimization engine.",
+          "V7 fairness-aware territory workforce routing engine — visualize compactness, overlap, and operational fairness.",
       },
     ],
   }),
@@ -56,8 +57,10 @@ function Index() {
   const [showRoutes, setShowRoutes] = useState(true);
   const [showTerritories, setShowTerritories] = useState(true);
   const [showStopNumbers, setShowStopNumbers] = useState(true);
+  const [showOverlap, setShowOverlap] = useState(true);
+  const [showBorderTasks, setShowBorderTasks] = useState(true);
+  const [showSpread, setShowSpread] = useState(false);
 
-  // Reset visibility when simulation users change
   const userIds = simulation.users.map((u) => u.id).join(",");
   useEffect(() => {
     setVisible(new Set(simulation.users.map((u) => u.id)));
@@ -77,13 +80,10 @@ function Index() {
     });
   const soloUser = (id: string) => setVisible(new Set([id]));
 
+  const f = simulation.fairness;
   const distances = simulation.users.map((u) => u.totalRouteDistance);
   const workloads = simulation.users.map((u) => u.totalWorkload);
-  const minD = Math.min(...distances);
-  const maxD = Math.max(...distances);
   const avgD = distances.reduce((s, d) => s + d, 0) / distances.length;
-  const minW = Math.min(...workloads);
-  const maxW = Math.max(...workloads);
   const avgW = workloads.reduce((s, d) => s + d, 0) / workloads.length;
 
   const run = () =>
@@ -100,16 +100,17 @@ function Index() {
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/40 px-6 py-3 backdrop-blur">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
-            V6 Workforce Routing — Dispatch Dashboard
+            V7 Territory Routing — Fairness Dashboard
           </h1>
           <p className="text-xs text-muted-foreground">
             {simulation.users.length} users · {simulation.tasks.length} tasks ·
-            workload {simulation.totalWorkload.toFixed(1)} · fairness Δ{" "}
-            {simulation.fairness.toFixed(1)} · total{" "}
-            {simulation.totalDistance.toFixed(0)} km
+            workload {simulation.totalWorkload.toFixed(1)} · total{" "}
+            {simulation.totalDistance.toFixed(0)} km · overlap pairs{" "}
+            {simulation.overlapHotspots.length}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <FairnessBadge fairness={f} />
           <Button
             size="sm"
             variant="outline"
@@ -136,7 +137,7 @@ function Index() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="flex w-[340px] shrink-0 flex-col overflow-hidden border-r border-border bg-card/20">
+        <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-r border-border bg-card/20">
           {/* Controls */}
           <div className="space-y-3 border-b border-border p-3">
             <div className="grid grid-cols-2 gap-2">
@@ -213,38 +214,81 @@ function Index() {
             </div>
 
             <Button size="sm" className="w-full" onClick={run}>
-              Run optimization
+              Run V7 optimization
             </Button>
           </div>
 
-          {/* Layer toggles */}
-          <div className="space-y-2 border-b border-border p-3 text-xs">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Routes</Label>
-              <Switch checked={showRoutes} onCheckedChange={setShowRoutes} />
+          {/* Fairness panel */}
+          <div className="space-y-2 border-b border-border p-3">
+            <div className="flex items-baseline justify-between">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Fairness
+              </div>
+              <div className="text-xs font-semibold">{f.label}</div>
             </div>
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Territories</Label>
-              <Switch
-                checked={showTerritories}
-                onCheckedChange={setShowTerritories}
-              />
+            <div className="flex items-baseline gap-1">
+              <div className="text-3xl font-semibold tabular-nums">
+                {f.overallFairnessScore.toFixed(1)}
+              </div>
+              <div className="text-xs text-muted-foreground">/ 100</div>
             </div>
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">
-                Stop numbers
-                <span className="ml-1 text-[10px] text-muted-foreground">
-                  (≤3 users)
-                </span>
-              </Label>
-              <Switch
-                checked={showStopNumbers}
-                onCheckedChange={setShowStopNumbers}
-              />
-            </div>
+            <ProgressBar
+              label="Workload"
+              value={f.workloadFairness}
+              colorVar="#22c55e"
+            />
+            <ProgressBar
+              label="Distance"
+              value={f.distanceFairness}
+              colorVar="#3b82f6"
+            />
+            <ProgressBar
+              label="Compactness"
+              value={f.compactnessFairness}
+              colorVar="#a855f7"
+            />
+            <ProgressBar
+              label="Overlap"
+              value={f.overlapFairness}
+              colorVar="#f97316"
+            />
           </div>
 
-          {/* Category filters / legend */}
+          {/* Layer toggles */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-b border-border p-3 text-xs">
+            <ToggleRow
+              label="Routes"
+              checked={showRoutes}
+              onChange={setShowRoutes}
+            />
+            <ToggleRow
+              label="Territories"
+              checked={showTerritories}
+              onChange={setShowTerritories}
+            />
+            <ToggleRow
+              label="Spread"
+              checked={showSpread}
+              onChange={setShowSpread}
+            />
+            <ToggleRow
+              label="Overlap"
+              checked={showOverlap}
+              onChange={setShowOverlap}
+            />
+            <ToggleRow
+              label="Border tasks"
+              checked={showBorderTasks}
+              onChange={setShowBorderTasks}
+            />
+            <ToggleRow
+              label="Stop #"
+              checked={showStopNumbers}
+              onChange={setShowStopNumbers}
+            />
+          </div>
+
+          {/* Category filters */}
           <div className="border-b border-border p-3">
             <div className="mb-2 text-xs font-medium">Categories</div>
             <div className="grid grid-cols-2 gap-1.5">
@@ -280,12 +324,12 @@ function Index() {
             <Stat label="Avg distance" value={`${avgD.toFixed(1)} km`} />
             <Stat label="Avg workload" value={avgW.toFixed(2)} />
             <Stat
-              label="Distance range"
-              value={`${minD.toFixed(0)}–${maxD.toFixed(0)}`}
+              label="Avg spread"
+              value={`${simulation.avgCompactness.toFixed(2)} km`}
             />
             <Stat
-              label="Workload range"
-              value={`${minW.toFixed(1)}–${maxW.toFixed(1)}`}
+              label="Overlap penalty"
+              value={simulation.overlapPenalty.toFixed(0)}
             />
           </div>
 
@@ -299,12 +343,19 @@ function Index() {
                   <th className="px-2 py-2 text-right">Jobs</th>
                   <th className="px-2 py-2 text-right">Load</th>
                   <th className="px-2 py-2 text-right">Km</th>
+                  <th className="px-2 py-2 text-right" title="Avg spread (km)">
+                    Spr
+                  </th>
+                  <th className="px-2 py-2 text-right" title="Overlap pairs">
+                    Ov
+                  </th>
                   <th className="px-2 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {simulation.users.map((u) => {
                   const on = visible.has(u.id);
+                  const cb = u.categoryBreakdown;
                   return (
                     <tr
                       key={u.id}
@@ -324,6 +375,7 @@ function Index() {
                       <td
                         className="cursor-pointer px-2 py-1.5 font-medium"
                         onClick={() => toggleUser(u.id)}
+                        title={`A:${cb.A} B:${cb.B} C:${cb.C} D:${cb.D} · return ${u.returnDistance.toFixed(1)}km · score ${u.fairnessScore.toFixed(0)}`}
                       >
                         {u.id}
                       </td>
@@ -334,7 +386,15 @@ function Index() {
                         {u.totalWorkload.toFixed(1)}
                       </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
-                        {u.totalRouteDistance.toFixed(1)}
+                        {u.totalRouteDistance.toFixed(0)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {u.avgSpread.toFixed(1)}
+                      </td>
+                      <td
+                        className={`px-2 py-1.5 text-right tabular-nums ${u.overlapCount > 0 ? "text-orange-500" : "text-muted-foreground"}`}
+                      >
+                        {u.overlapCount}
                       </td>
                       <td className="px-1 py-1">
                         <button
@@ -366,6 +426,9 @@ function Index() {
             showRoutes={showRoutes}
             showTerritories={showTerritories}
             showStopNumbers={showStopNumbers}
+            showOverlap={showOverlap}
+            showBorderTasks={showBorderTasks}
+            showSpread={showSpread}
             center={config.center}
             radiusKm={config.radiusKm}
             pickMode={pickMode}
@@ -387,6 +450,72 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <Label className="text-xs">{label}</Label>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function ProgressBar({
+  label,
+  value,
+  colorVar,
+}: {
+  label: string;
+  value: number;
+  colorVar: string;
+}) {
+  return (
+    <div className="space-y-0.5">
+      <div className="flex justify-between text-[10px] text-muted-foreground">
+        <span>{label}</span>
+        <span className="tabular-nums">{value.toFixed(1)}</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: `${Math.max(0, Math.min(100, value))}%`,
+            background: colorVar,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FairnessBadge({ fairness }: { fairness: FairnessReport }) {
+  const colorMap: Record<FairnessReport["label"], string> = {
+    EXCELLENT: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
+    GOOD: "bg-blue-500/15 text-blue-500 border-blue-500/30",
+    AVERAGE: "bg-yellow-500/15 text-yellow-600 border-yellow-500/30",
+    POOR: "bg-orange-500/15 text-orange-500 border-orange-500/30",
+    "VERY POOR": "bg-red-500/15 text-red-500 border-red-500/30",
+  };
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-md border px-3 py-1 text-xs font-medium ${colorMap[fairness.label]}`}
+    >
+      <span className="tabular-nums">
+        {fairness.overallFairnessScore.toFixed(1)}
+      </span>
+      <span className="opacity-70">·</span>
+      <span>{fairness.label}</span>
     </div>
   );
 }
