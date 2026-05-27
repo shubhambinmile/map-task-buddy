@@ -227,7 +227,7 @@ export function LocationsMap({
               [center.lat, center.lng],
             ];
             return (
-              <g key={`g-${u.id}`} style={{display:"contents"}}>
+              <FragmentWithKey key={`g-${u.id}`}>
                 {pri.length >= 2 && (
                   <Polyline
                     key={`pri-${u.id}`}
@@ -251,7 +251,7 @@ export function LocationsMap({
                     }}
                   />
                 )}
-              </g>
+              </FragmentWithKey>
             );
           }
           const pts: [number, number][] = [
