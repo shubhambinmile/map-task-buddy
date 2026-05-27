@@ -355,9 +355,6 @@ function getBorderTasks(user: User): Task[] {
     .map((x) => x.t);
 }
 
-const BORDER_TASK_PERCENTAGE_FACTOR = 0.3;
-// extend config with border task percentage
-(CONFIG as any).BORDER_TASK_PERCENTAGE = BORDER_TASK_PERCENTAGE_FACTOR;
 
 function optimizeTerritories(users: User[], center: LatLng) {
   for (let it = 0; it < CONFIG.OPTIMIZATION_ITERATIONS; it++) {
