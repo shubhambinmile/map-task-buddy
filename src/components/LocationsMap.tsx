@@ -227,7 +227,7 @@ export function LocationsMap({
               [center.lat, center.lng],
             ];
             return (
-              <g key={`g-${u.id}`}>
+              <g key={`g-${u.id}`} style={{display:"contents"}}>
                 {pri.length >= 2 && (
                   <Polyline
                     key={`pri-${u.id}`}
