@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment as FragmentWithKey, useEffect, useMemo, useState } from "react";
 import {
   CATEGORY_CONFIG,
   type Category,
