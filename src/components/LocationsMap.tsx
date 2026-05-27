@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment as FragmentWithKey, useEffect, useMemo, useState } from "react";
 import {
   CATEGORY_CONFIG,
   type Category,
   type LatLng,
   type Simulation,
+  type Task,
   type User,
 } from "@/lib/routing";
 
@@ -46,6 +47,10 @@ export function LocationsMap({
   showOverlap,
   showBorderTasks,
   showSpread,
+  showPriorityOnly,
+  showFlexibleOnly,
+  highlightFlexible,
+  phasedRoutes,
   center,
   radiusKm,
   pickMode,
@@ -60,6 +65,10 @@ export function LocationsMap({
   showOverlap: boolean;
   showBorderTasks: boolean;
   showSpread: boolean;
+  showPriorityOnly: boolean;
+  showFlexibleOnly: boolean;
+  highlightFlexible: boolean;
+  phasedRoutes: boolean;
   center: LatLng;
   radiusKm: number;
   pickMode?: boolean;
@@ -136,8 +145,15 @@ export function LocationsMap({
   const radiusByCat: Record<Category, number> = {
     A: 3,
     C: 4,
-    B: 5,
+    B: 6,
     D: 7,
+  };
+
+  const passTaskFilter = (t: Task) => {
+    if (!visibleCategories.has(t.category)) return false;
+    if (showPriorityOnly && !t.isPriority) return false;
+    if (showFlexibleOnly && t.isCore) return false;
+    return true;
   };
 
   return (
@@ -181,18 +197,63 @@ export function LocationsMap({
               positions={u.hull.map((p) => [p.lat, p.lng]) as [number, number][]}
               pathOptions={{
                 color: u.color,
-                weight: 1,
-                opacity: 0.6,
+                weight: 1.5,
+                opacity: 0.7,
                 fillColor: u.color,
-                fillOpacity: 0.08,
+                fillOpacity: 0.1,
               }}
             />
           ) : null,
         )}
 
-      {/* Routes */}
+      {/* Routes — phased: priority solid+thick, normal dashed */}
       {showRoutes &&
         visible.map((u: User) => {
+          if (phasedRoutes) {
+            const pri: [number, number][] = [
+              [center.lat, center.lng],
+              ...u.priorityRoute.map(
+                (t) => [t.location.lat, t.location.lng] as [number, number],
+              ),
+            ];
+            const handoff = u.priorityRoute.length
+              ? u.priorityRoute[u.priorityRoute.length - 1].location
+              : center;
+            const norm: [number, number][] = [
+              [handoff.lat, handoff.lng],
+              ...u.normalRoute.map(
+                (t) => [t.location.lat, t.location.lng] as [number, number],
+              ),
+              [center.lat, center.lng],
+            ];
+            return (
+              <FragmentWithKey key={`g-${u.id}`}>
+                {pri.length >= 2 && (
+                  <Polyline
+                    key={`pri-${u.id}`}
+                    positions={pri}
+                    pathOptions={{
+                      color: u.color,
+                      weight: 4,
+                      opacity: 0.95,
+                    }}
+                  />
+                )}
+                {norm.length >= 2 && (
+                  <Polyline
+                    key={`nor-${u.id}`}
+                    positions={norm}
+                    pathOptions={{
+                      color: u.color,
+                      weight: 2,
+                      opacity: 0.7,
+                      dashArray: "6 6",
+                    }}
+                  />
+                )}
+              </FragmentWithKey>
+            );
+          }
           const pts: [number, number][] = [
             [center.lat, center.lng],
             ...u.optimizedRoute.map(
@@ -211,51 +272,83 @@ export function LocationsMap({
 
       {/* Task markers */}
       {visible.map((u: User) =>
-        u.optimizedRoute
-          .filter((t) => visibleCategories.has(t.category))
-          .map((t, idx) => {
-            const cfg = CATEGORY_CONFIG[t.category];
-            const isBorder = !!t.isBorder && showBorderTasks;
-            return (
-              <CircleMarker
-                key={`${u.id}-${t.id}`}
-                center={[t.location.lat, t.location.lng]}
-                radius={radiusByCat[t.category] + (isBorder ? 2 : 0)}
-                pathOptions={{
-                  color: isBorder ? "#f97316" : u.color,
-                  fillColor: cfg.color,
-                  fillOpacity: 0.95,
-                  weight: isBorder ? 2.5 : 1.5,
-                  dashArray: isBorder ? "2 2" : undefined,
-                }}
-              >
-                <Tooltip direction="top" offset={[0, -4]} opacity={0.9}>
-                  {u.id} · #{idx + 1} · {t.id} · {t.category}
-                  {isBorder ? " · border" : ""}
-                </Tooltip>
-                <Popup>
-                  <div className="text-xs leading-relaxed">
-                    <div className="font-semibold">{t.id}</div>
-                    <div>Category: {t.category} (×{t.workloadWeight})</div>
-                    <div>Est. hours: {t.avgCompletionHours}h</div>
-                    <div>User: {u.id}</div>
-                    <div>Cluster: {t.clusterId}</div>
-                    <div>Stop #: {idx + 1}</div>
-                    <div>Leg: {(t.travelDistance ?? 0).toFixed(2)} km</div>
-                    <div>From center: {t.centerDistance.toFixed(2)} km</div>
-                    {t.isBorder && (
-                      <div className="font-semibold text-orange-600">
-                        Border task (territory edge)
-                      </div>
+        u.optimizedRoute.filter(passTaskFilter).map((t) => {
+          const cfg = CATEGORY_CONFIG[t.category];
+          const isBorder = !!t.isBorder && showBorderTasks;
+          const isFlex = !t.isCore;
+          const isPri = t.isPriority;
+          const idx = t.stopIndex ?? 0;
+          const baseR = radiusByCat[t.category];
+          const r = baseR + (isPri ? 2 : 0) + (isBorder ? 1 : 0);
+          const stroke = isPri
+            ? "#3b82f6"
+            : isBorder
+              ? "#f97316"
+              : isFlex && highlightFlexible
+                ? "#a855f7"
+                : u.color;
+          const dash =
+            isPri
+              ? undefined
+              : isFlex && highlightFlexible
+                ? "3 3"
+                : isBorder
+                  ? "2 2"
+                  : undefined;
+          return (
+            <CircleMarker
+              key={`${u.id}-${t.id}`}
+              center={[t.location.lat, t.location.lng]}
+              radius={r}
+              pathOptions={{
+                color: stroke,
+                fillColor: cfg.color,
+                fillOpacity: isFlex && highlightFlexible ? 0.6 : 0.95,
+                weight: isPri ? 3 : 1.8,
+                dashArray: dash,
+              }}
+            >
+              <Tooltip direction="top" offset={[0, -4]} opacity={0.9}>
+                {u.id} · #{idx} · {t.id} · {t.category}
+                {isPri ? " · PRIORITY" : ""}
+                {isFlex ? " · flexible" : " · core"}
+              </Tooltip>
+              <Popup>
+                <div className="text-xs leading-relaxed">
+                  <div className="font-semibold">
+                    {t.id}
+                    {isPri && (
+                      <span className="ml-1 rounded bg-blue-500 px-1 text-[10px] text-white">
+                        PRIORITY
+                      </span>
                     )}
-                    <div>
-                      {t.location.lat.toFixed(4)}, {t.location.lng.toFixed(4)}
-                    </div>
                   </div>
-                </Popup>
-              </CircleMarker>
-            );
-          }),
+                  <div>
+                    Category: {t.category} (×{t.workloadWeight})
+                  </div>
+                  <div>Est. hours: {t.avgCompletionHours}h</div>
+                  <div>Installer: {u.id}</div>
+                  <div>
+                    Type: {t.isCore ? "Core (territory-defining)" : "Flexible (dynamic)"}
+                  </div>
+                  <div>
+                    Phase: <strong>{t.routePhase ?? "—"}</strong> · Stop #{idx}
+                  </div>
+                  <div>Leg: {(t.travelDistance ?? 0).toFixed(2)} km</div>
+                  <div>From center: {t.centerDistance.toFixed(2)} km</div>
+                  {t.isBorder && (
+                    <div className="font-semibold text-orange-600">
+                      Border task (territory edge)
+                    </div>
+                  )}
+                  <div>
+                    {t.location.lat.toFixed(4)}, {t.location.lng.toFixed(4)}
+                  </div>
+                </div>
+              </Popup>
+            </CircleMarker>
+          );
+        }),
       )}
 
       {/* Territory spread circle */}
@@ -300,20 +393,21 @@ export function LocationsMap({
               }}
             >
               <Tooltip direction="top" offset={[0, -6]}>
-                Overlap · {h.a.userId}·{h.a.taskId} ↔ {h.b.userId}·{h.b.taskId}{" "}
-                · {h.distanceKm.toFixed(2)} km
+                Overlap · {h.a.userId}·{h.a.taskId} ↔ {h.b.userId}·{h.b.taskId} ·{" "}
+                {h.distanceKm.toFixed(2)} km
               </Tooltip>
             </CircleMarker>
           );
         })}
 
-      {/* Stop numbers (only when soloing few users to avoid clutter) */}
+      {/* Stop numbers */}
       {showStopNumbers &&
         visible.length <= 3 &&
         visible.map((u: User) =>
-          u.optimizedRoute
-            .filter((t) => visibleCategories.has(t.category))
-            .map((t, idx) => (
+          u.optimizedRoute.filter(passTaskFilter).map((t) => {
+            const idx = t.stopIndex ?? 0;
+            const isPri = t.isPriority;
+            return (
               <Marker
                 key={`num-${u.id}-${t.id}`}
                 position={[t.location.lat, t.location.lng]}
@@ -321,18 +415,19 @@ export function LocationsMap({
                   className: "",
                   html: `<div style="
                     transform:translate(8px,-18px);
-                    background:${u.color};color:white;
+                    background:${isPri ? "#3b82f6" : u.color};color:white;
                     font-size:10px;font-weight:700;
                     padding:1px 5px;border-radius:8px;
                     border:1px solid rgba(255,255,255,.5);
                     box-shadow:0 1px 3px rgba(0,0,0,.3);
-                  ">${idx + 1}</div>`,
+                  ">${isPri ? "★" : ""}${idx}</div>`,
                   iconSize: [0, 0],
                   iconAnchor: [0, 0],
                 })}
                 interactive={false}
               />
-            )),
+            );
+          }),
         )}
 
       {/* User centroid markers */}
@@ -351,8 +446,8 @@ export function LocationsMap({
               }}
             >
               <Tooltip direction="top" offset={[0, -6]}>
-                {u.id} territory · {u.assignedTasks.length} jobs · workload{" "}
-                {u.totalWorkload.toFixed(2)}
+                {u.id} territory · {u.assignedTasks.length} jobs · ★{u.priorityCount} ·
+                workload {u.totalWorkload.toFixed(2)}
               </Tooltip>
             </CircleMarker>
           ) : null,

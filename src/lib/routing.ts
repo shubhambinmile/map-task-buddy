@@ -1,4 +1,4 @@
-// V7 Fairness-Aware Territory Workforce Routing System
+// V8 — Priority-Aware Territory Optimization Engine
 
 export type LatLng = { lat: number; lng: number };
 
@@ -14,28 +14,27 @@ export const CATEGORY_CONFIG: Record<
   D: { avgHours: 8, weight: 2, color: "#ef4444" },
 };
 
-export const CONFIG = {
-  CLUSTER_ITERATIONS: 20,
-  OPTIMIZATION_ITERATIONS: 100,
-  BORDER_MOVE_DISTANCE_KM: 15,
-  OVERLAP_DISTANCE_KM: 5,
-  WORKLOAD_SCORE_WEIGHT: 100,
-  DISTANCE_SCORE_WEIGHT: 0.15,
-  COMPACTNESS_SCORE_WEIGHT: 1.5,
-  OVERLAP_SCORE_WEIGHT: 50,
-};
+export const PRIORITY_CATEGORIES: Category[] = ["B"];
 
-export const FAIRNESS_CONFIG = {
-  WORKLOAD_WEIGHT: 0.4,
-  DISTANCE_WEIGHT: 0.3,
-  COMPACTNESS_WEIGHT: 0.2,
-  OVERLAP_WEIGHT: 0.1,
+export const CONFIG = {
+  CORE_TASK_PERCENTAGE: 0.8,
+  CLUSTER_ITERATIONS: 20,
+  OPTIMIZATION_ITERATIONS: 80,
+  BORDER_MOVE_DISTANCE_KM: 15,
+  BORDER_TASK_PERCENTAGE: 0.3,
+  OVERLAP_DISTANCE_KM: 8,
+  WORKLOAD_WEIGHT: 100,
+  DISTANCE_WEIGHT: 0.2,
+  COMPACTNESS_WEIGHT: 1.5,
+  OVERLAP_WEIGHT: 50,
 };
 
 export type Task = {
   id: string;
   location: LatLng;
   category: Category;
+  isPriority: boolean;
+  isCore: boolean; // true if part of core 80%, false if flexible
   workloadWeight: number;
   avgCompletionHours: number;
   centerDistance: number;
@@ -43,6 +42,8 @@ export type Task = {
   clusterId?: number;
   assignedUserId?: string;
   isBorder?: boolean;
+  routePhase?: "priority" | "normal";
+  stopIndex?: number;
 };
 
 export type CategoryBreakdown = Record<Category, number>;
@@ -53,32 +54,30 @@ export type User = {
   clusterId: number;
   assignedTasks: Task[];
   optimizedRoute: Task[];
+  priorityRoute: Task[];
+  normalRoute: Task[];
   totalRouteDistance: number;
+  priorityDistance: number;
+  normalDistance: number;
   returnDistance: number;
   totalWorkload: number;
   totalHours: number;
   centroid: LatLng;
   hull: LatLng[];
-  compactness: number; // sum of distances of tasks to territory center (lower = more compact)
-  avgSpread: number; // avg distance from centroid (km)
-  overlapCount: number; // number of own tasks within OVERLAP_DISTANCE_KM of another user's task
-  fairnessScore: number;
+  compactness: number;
+  avgSpread: number;
+  overlapCount: number;
+  priorityCount: number;
+  flexibleCount: number;
+  coreCount: number;
   categoryBreakdown: CategoryBreakdown;
+  efficiency: number; // workload per km
 };
 
 export type OverlapHotspot = {
   a: { userId: string; taskId: string; location: LatLng };
   b: { userId: string; taskId: string; location: LatLng };
   distanceKm: number;
-};
-
-export type FairnessReport = {
-  overallFairnessScore: number;
-  workloadFairness: number;
-  distanceFairness: number;
-  compactnessFairness: number;
-  overlapFairness: number;
-  label: "EXCELLENT" | "GOOD" | "AVERAGE" | "POOR" | "VERY POOR";
 };
 
 export const defaultOfficeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
@@ -97,18 +96,18 @@ function mulberry32(seed: number) {
 }
 
 function generatePointInRadius(
-  centerLat: number,
-  centerLng: number,
+  cLat: number,
+  cLng: number,
   radiusKm: number,
   rand: () => number,
 ): LatLng {
   const angle = rand() * 2 * Math.PI;
   const r = radiusKm * Math.sqrt(rand());
-  const deltaLat = (r / EARTH_RADIUS_KM) * (180 / Math.PI);
-  const deltaLng = deltaLat / Math.cos((centerLat * Math.PI) / 180);
+  const dLat = (r / EARTH_RADIUS_KM) * (180 / Math.PI);
+  const dLng = dLat / Math.cos((cLat * Math.PI) / 180);
   return {
-    lat: +(centerLat + deltaLat * Math.cos(angle)).toFixed(6),
-    lng: +(centerLng + deltaLng * Math.sin(angle)).toFixed(6),
+    lat: +(cLat + dLat * Math.cos(angle)).toFixed(6),
+    lng: +(cLng + dLng * Math.sin(angle)).toFixed(6),
   };
 }
 
@@ -156,12 +155,10 @@ function convexHull(points: LatLng[]): LatLng[] {
   return lower.concat(upper);
 }
 
-function buildOptimizedRoute(tasks: Task[], center: LatLng) {
-  if (tasks.length === 0)
-    return { route: [] as Task[], totalDistance: 0, returnDistance: 0 };
+function nearestNeighborRoute(tasks: Task[], start: LatLng) {
   const remaining = [...tasks];
   const route: Task[] = [];
-  let cur: LatLng = center;
+  let cur = start;
   let total = 0;
   while (remaining.length) {
     let bi = 0;
@@ -173,15 +170,38 @@ function buildOptimizedRoute(tasks: Task[], center: LatLng) {
         bi = i;
       }
     }
-    const next = remaining[bi];
-    route.push({ ...next, travelDistance: bd });
+    const next = { ...remaining[bi], travelDistance: bd };
+    route.push(next);
     total += bd;
     cur = next.location;
     remaining.splice(bi, 1);
   }
-  const returnDistance = haversine(cur, center);
-  total += returnDistance;
-  return { route, totalDistance: total, returnDistance };
+  return { route, totalDistance: total, end: cur };
+}
+
+// V8 phased route: center → priority → normal → center
+function buildPhasedRoute(tasks: Task[], center: LatLng) {
+  const priority = tasks.filter((t) => t.isPriority);
+  const normal = tasks.filter((t) => !t.isPriority);
+  const p = nearestNeighborRoute(priority, center);
+  p.route.forEach((t) => (t.routePhase = "priority"));
+  const n = nearestNeighborRoute(normal, p.end);
+  n.route.forEach((t) => (t.routePhase = "normal"));
+  const lastPoint = n.route.length
+    ? n.route[n.route.length - 1].location
+    : p.end;
+  const returnDistance = haversine(lastPoint, center);
+  const route = [...p.route, ...n.route];
+  route.forEach((t, i) => (t.stopIndex = i + 1));
+  return {
+    route,
+    priorityRoute: p.route,
+    normalRoute: n.route,
+    priorityDistance: p.totalDistance,
+    normalDistance: n.totalDistance,
+    returnDistance,
+    totalDistance: p.totalDistance + n.totalDistance + returnDistance,
+  };
 }
 
 function territoryCenter(tasks: Task[], fallback: LatLng): LatLng {
@@ -191,22 +211,14 @@ function territoryCenter(tasks: Task[], fallback: LatLng): LatLng {
   return { lat, lng };
 }
 
-function computeCompactness(tasks: Task[]): {
-  total: number;
-  avg: number;
-  centroid: LatLng;
-} {
-  if (!tasks.length)
-    return { total: 0, avg: 0, centroid: { lat: 0, lng: 0 } };
-  const c = territoryCenter(tasks, { lat: 0, lng: 0 });
-  const total = tasks.reduce((s, t) => s + haversine(t.location, c), 0);
-  return { total, avg: total / tasks.length, centroid: c };
-}
-
 function calculateUserMetrics(user: User, center: LatLng) {
-  const r = buildOptimizedRoute(user.assignedTasks, center);
+  const r = buildPhasedRoute(user.assignedTasks, center);
   user.optimizedRoute = r.route;
+  user.priorityRoute = r.priorityRoute;
+  user.normalRoute = r.normalRoute;
   user.totalRouteDistance = r.totalDistance;
+  user.priorityDistance = r.priorityDistance;
+  user.normalDistance = r.normalDistance;
   user.returnDistance = r.returnDistance;
   user.totalWorkload = user.assignedTasks.reduce(
     (s, t) => s + t.workloadWeight,
@@ -216,40 +228,48 @@ function calculateUserMetrics(user: User, center: LatLng) {
     (s, t) => s + t.avgCompletionHours,
     0,
   );
-  const c = computeCompactness(user.assignedTasks);
-  user.compactness = c.total;
-  user.avgSpread = c.avg;
-  user.centroid = user.assignedTasks.length ? c.centroid : center;
+  const c = territoryCenter(user.assignedTasks, center);
+  user.centroid = user.assignedTasks.length ? c : center;
+  const dists = user.assignedTasks.map((t) => haversine(t.location, c));
+  user.compactness = dists.reduce((s, d) => s + d, 0);
+  user.avgSpread = dists.length ? user.compactness / dists.length : 0;
   user.hull = user.assignedTasks.length
     ? convexHull(user.assignedTasks.map((t) => t.location))
     : [];
   const cb: CategoryBreakdown = { A: 0, B: 0, C: 0, D: 0 };
-  user.assignedTasks.forEach((t) => {
-    cb[t.category]++;
-  });
+  user.assignedTasks.forEach((t) => cb[t.category]++);
   user.categoryBreakdown = cb;
-  user.fairnessScore =
-    user.totalWorkload * CONFIG.WORKLOAD_SCORE_WEIGHT +
-    user.totalRouteDistance * CONFIG.DISTANCE_SCORE_WEIGHT +
-    user.compactness * CONFIG.COMPACTNESS_SCORE_WEIGHT;
+  user.priorityCount = user.assignedTasks.filter((t) => t.isPriority).length;
+  user.coreCount = user.assignedTasks.filter((t) => t.isCore).length;
+  user.flexibleCount = user.assignedTasks.length - user.coreCount;
+  user.efficiency =
+    user.totalRouteDistance > 0
+      ? user.totalWorkload / user.totalRouteDistance
+      : 0;
 }
 
-// V7 territory clustering: workload-aware
-function createTerritories(tasks: Task[], k: number) {
-  let centroids: LatLng[] = tasks.slice(0, k).map((t) => ({
-    lat: t.location.lat,
-    lng: t.location.lng,
-  }));
+// k-means on core tasks with workload awareness
+function createCoreTerritories(coreTasks: Task[], k: number) {
+  let centroids: LatLng[] = coreTasks.slice(0, k).map((t) => ({ ...t.location }));
+  // pad centroids if not enough core tasks
+  while (centroids.length < k) {
+    centroids.push(
+      coreTasks[centroids.length % Math.max(1, coreTasks.length)]?.location ?? {
+        lat: 0,
+        lng: 0,
+      },
+    );
+  }
   let clusters: Task[][] = [];
   for (let it = 0; it < CONFIG.CLUSTER_ITERATIONS; it++) {
     clusters = Array.from({ length: k }, () => []);
-    for (const t of tasks) {
+    for (const t of coreTasks) {
       let bi = 0;
       let bs = Infinity;
-      for (let i = 0; i < centroids.length; i++) {
+      for (let i = 0; i < k; i++) {
         const geo = haversine(t.location, centroids[i]);
         const cw = clusters[i].reduce((s, x) => s + x.workloadWeight, 0);
-        const score = geo + cw * 2;
+        const score = geo + cw * 1.5;
         if (score < bs) {
           bs = score;
           bi = i;
@@ -265,7 +285,30 @@ function createTerritories(tasks: Task[], k: number) {
     });
   }
   clusters.forEach((c, i) => c.forEach((t) => (t.clusterId = i)));
-  return clusters;
+  return { clusters, centroids };
+}
+
+// Assign flexible tasks to existing territories (workload-aware)
+function assignFlexibleTasks(
+  flexible: Task[],
+  clusters: Task[][],
+  centroids: LatLng[],
+) {
+  for (const t of flexible) {
+    let bi = 0;
+    let bs = Infinity;
+    for (let i = 0; i < centroids.length; i++) {
+      const geo = haversine(t.location, centroids[i]);
+      const cw = clusters[i].reduce((s, x) => s + x.workloadWeight, 0);
+      const score = geo + cw * 0.8;
+      if (score < bs) {
+        bs = score;
+        bi = i;
+      }
+    }
+    t.clusterId = bi;
+    clusters[bi].push(t);
+  }
 }
 
 function calculateOverlapPenalty(users: User[]) {
@@ -275,7 +318,7 @@ function calculateOverlapPenalty(users: User[]) {
       for (const a of users[i].assignedTasks) {
         for (const b of users[j].assignedTasks) {
           if (haversine(a.location, b.location) < CONFIG.OVERLAP_DISTANCE_KM) {
-            penalty += CONFIG.OVERLAP_SCORE_WEIGHT;
+            penalty += CONFIG.OVERLAP_WEIGHT;
           }
         }
       }
@@ -284,26 +327,39 @@ function calculateOverlapPenalty(users: User[]) {
   return penalty;
 }
 
-function getGlobalScore(users: User[]) {
+function userScore(u: User) {
+  return (
+    u.totalWorkload * CONFIG.WORKLOAD_WEIGHT +
+    u.totalRouteDistance * CONFIG.DISTANCE_WEIGHT +
+    u.compactness * CONFIG.COMPACTNESS_WEIGHT
+  );
+}
+
+function globalScore(users: User[]) {
   const overlap = calculateOverlapPenalty(users);
-  const scores = users.map((u) => u.fairnessScore);
-  return Math.max(...scores) - Math.min(...scores) + overlap;
+  const s = users.map(userScore);
+  return Math.max(...s) - Math.min(...s) + overlap;
 }
 
 function getBorderTasks(user: User): Task[] {
   if (!user.assignedTasks.length) return [];
-  const center = territoryCenter(user.assignedTasks, user.centroid);
+  const c = user.centroid;
+  // prefer moving flexible/non-priority tasks; priorities are sticky
   return [...user.assignedTasks]
-    .map((t) => ({ t, d: haversine(t.location, center) }))
+    .map((t) => ({
+      t,
+      d: haversine(t.location, c) * (t.isPriority ? 0.4 : 1) * (t.isCore ? 0.7 : 1.3),
+    }))
     .sort((a, b) => b.d - a.d)
-    .slice(0, 5)
+    .slice(0, Math.max(3, Math.ceil(user.assignedTasks.length * CONFIG.BORDER_TASK_PERCENTAGE)))
     .map((x) => x.t);
 }
 
+
 function optimizeTerritories(users: User[], center: LatLng) {
   for (let it = 0; it < CONFIG.OPTIMIZATION_ITERATIONS; it++) {
-    const cur = getGlobalScore(users);
-    users.sort((a, b) => b.fairnessScore - a.fairnessScore);
+    const cur = globalScore(users);
+    users.sort((a, b) => userScore(b) - userScore(a));
     const heavy = users[0];
     const border = getBorderTasks(heavy);
     let improved = false;
@@ -316,22 +372,18 @@ function optimizeTerritories(users: User[], center: LatLng) {
             CONFIG.BORDER_MOVE_DISTANCE_KM,
         );
         if (!nearby) continue;
-        heavy.assignedTasks = heavy.assignedTasks.filter(
-          (t) => t.id !== task.id,
-        );
+        heavy.assignedTasks = heavy.assignedTasks.filter((t) => t.id !== task.id);
         target.assignedTasks.push(task);
         calculateUserMetrics(heavy, center);
         calculateUserMetrics(target, center);
-        const nd = getGlobalScore(users);
+        const nd = globalScore(users);
         if (nd < cur) {
           task.assignedUserId = target.id;
+          task.clusterId = target.clusterId;
           improved = true;
           break;
         }
-        // revert
-        target.assignedTasks = target.assignedTasks.filter(
-          (t) => t.id !== task.id,
-        );
+        target.assignedTasks = target.assignedTasks.filter((t) => t.id !== task.id);
         heavy.assignedTasks.push(task);
         calculateUserMetrics(heavy, center);
         calculateUserMetrics(target, center);
@@ -340,44 +392,6 @@ function optimizeTerritories(users: User[], center: LatLng) {
     }
     if (!improved) break;
   }
-}
-
-function normalize(min: number, max: number) {
-  if (max === 0) return 1;
-  return 1 - (max - min) / max;
-}
-
-function fairnessLabel(score: number): FairnessReport["label"] {
-  if (score >= 90) return "EXCELLENT";
-  if (score >= 75) return "GOOD";
-  if (score >= 60) return "AVERAGE";
-  if (score >= 40) return "POOR";
-  return "VERY POOR";
-}
-
-function calculateFairness(users: User[]): FairnessReport {
-  const wl = users.map((u) => u.totalWorkload);
-  const dt = users.map((u) => u.totalRouteDistance);
-  const cp = users.map((u) => u.compactness);
-  const workload = normalize(Math.min(...wl), Math.max(...wl));
-  const distance = normalize(Math.min(...dt), Math.max(...dt));
-  const compact = normalize(Math.min(...cp), Math.max(...cp));
-  const overlap = calculateOverlapPenalty(users);
-  const overlapF = overlap === 0 ? 1 : 1 / (1 + overlap);
-  const final =
-    workload * FAIRNESS_CONFIG.WORKLOAD_WEIGHT +
-    distance * FAIRNESS_CONFIG.DISTANCE_WEIGHT +
-    compact * FAIRNESS_CONFIG.COMPACTNESS_WEIGHT +
-    overlapF * FAIRNESS_CONFIG.OVERLAP_WEIGHT;
-  const overall = +(final * 100).toFixed(2);
-  return {
-    overallFairnessScore: overall,
-    workloadFairness: +(workload * 100).toFixed(2),
-    distanceFairness: +(distance * 100).toFixed(2),
-    compactnessFairness: +(compact * 100).toFixed(2),
-    overlapFairness: +(overlapF * 100).toFixed(2),
-    label: fairnessLabel(overall),
-  };
 }
 
 function computeOverlapHotspots(users: User[]): OverlapHotspot[] {
@@ -402,33 +416,28 @@ function computeOverlapHotspots(users: User[]): OverlapHotspot[] {
 }
 
 function tagBorderAndOverlap(users: User[]) {
-  // Border tasks per user (top 5 farthest from centroid)
   users.forEach((u) => {
     u.assignedTasks.forEach((t) => (t.isBorder = false));
-    const border = getBorderTasks(u);
-    border.forEach((t) => {
+    getBorderTasks(u).forEach((t) => {
       const ref = u.assignedTasks.find((x) => x.id === t.id);
       if (ref) ref.isBorder = true;
       const ro = u.optimizedRoute.find((x) => x.id === t.id);
       if (ro) ro.isBorder = true;
     });
   });
-  // Overlap counts
   users.forEach((u) => (u.overlapCount = 0));
   for (let i = 0; i < users.length; i++) {
     for (let j = i + 1; j < users.length; j++) {
-      const A = users[i];
-      const B = users[j];
       let pairs = 0;
-      for (const a of A.assignedTasks) {
-        for (const b of B.assignedTasks) {
+      for (const a of users[i].assignedTasks) {
+        for (const b of users[j].assignedTasks) {
           if (haversine(a.location, b.location) < CONFIG.OVERLAP_DISTANCE_KM) {
             pairs++;
           }
         }
       }
-      A.overlapCount += pairs;
-      B.overlapCount += pairs;
+      users[i].overlapCount += pairs;
+      users[j].overlapCount += pairs;
     }
   }
 }
@@ -443,13 +452,19 @@ function makeColors(n: number) {
 export type Simulation = {
   users: User[];
   tasks: Task[];
-  fairness: FairnessReport;
+  coreTasks: Task[];
+  flexibleTasks: Task[];
+  priorityTasks: Task[];
   overlapPenalty: number;
   overlapHotspots: OverlapHotspot[];
   totalDistance: number;
   totalWorkload: number;
+  totalHours: number;
   avgCompactness: number;
-  legacyFairnessDelta: number; // max-min of fairnessScore
+  totalPriority: number;
+  totalFlexible: number;
+  workloadStdDev: number;
+  workloadDelta: number;
   center: LatLng;
   radiusKm: number;
 };
@@ -482,13 +497,29 @@ export function runSimulation(config: SimulationConfig = {}): Simulation {
       id: `T${i + 1}`,
       location: loc,
       category: cat,
+      isPriority: PRIORITY_CATEGORIES.includes(cat),
+      isCore: false,
       workloadWeight: cfg.weight,
       avgCompletionHours: cfg.avgHours,
       centerDistance: haversine(center, loc),
     };
   });
 
-  const clusters = createTerritories(tasks, totalUsers);
+  // V8: priority tasks ALWAYS in core 80%
+  const coreTargetCount = Math.floor(totalTasks * CONFIG.CORE_TASK_PERCENTAGE);
+  const priority = tasks.filter((t) => t.isPriority);
+  const normal = tasks.filter((t) => !t.isPriority);
+  // sort normals by distance from center (closer = more stable territory definers)
+  normal.sort((a, b) => a.centerDistance - b.centerDistance);
+  const coreNormalsCount = Math.max(0, coreTargetCount - priority.length);
+  const coreNormals = normal.slice(0, coreNormalsCount);
+  const flexible = normal.slice(coreNormalsCount);
+  const core = [...priority, ...coreNormals];
+  core.forEach((t) => (t.isCore = true));
+  flexible.forEach((t) => (t.isCore = false));
+
+  const { clusters, centroids } = createCoreTerritories(core, totalUsers);
+  assignFlexibleTasks(flexible, clusters, centroids);
 
   const users: User[] = Array.from({ length: totalUsers }, (_, i) => ({
     id: `U${i + 1}`,
@@ -496,7 +527,11 @@ export function runSimulation(config: SimulationConfig = {}): Simulation {
     clusterId: i,
     assignedTasks: clusters[i] ? [...clusters[i]] : [],
     optimizedRoute: [],
+    priorityRoute: [],
+    normalRoute: [],
     totalRouteDistance: 0,
+    priorityDistance: 0,
+    normalDistance: 0,
     returnDistance: 0,
     totalWorkload: 0,
     totalHours: 0,
@@ -505,8 +540,11 @@ export function runSimulation(config: SimulationConfig = {}): Simulation {
     compactness: 0,
     avgSpread: 0,
     overlapCount: 0,
-    fairnessScore: 0,
+    priorityCount: 0,
+    flexibleCount: 0,
+    coreCount: 0,
     categoryBreakdown: { A: 0, B: 0, C: 0, D: 0 },
+    efficiency: 0,
   }));
   users.forEach((u) => {
     u.assignedTasks.forEach((t) => (t.assignedUserId = u.id));
@@ -515,32 +553,43 @@ export function runSimulation(config: SimulationConfig = {}): Simulation {
 
   optimizeTerritories(users, center);
 
-  users.forEach((u) =>
-    u.assignedTasks.forEach((t) => (t.assignedUserId = u.id)),
-  );
+  users.forEach((u) => {
+    u.assignedTasks.forEach((t) => (t.assignedUserId = u.id));
+    calculateUserMetrics(u, center);
+  });
 
   tagBorderAndOverlap(users);
 
-  const fairness = calculateFairness(users);
   const overlapPenalty = calculateOverlapPenalty(users);
   const overlapHotspots = computeOverlapHotspots(users);
   const totalDistance = users.reduce((s, u) => s + u.totalRouteDistance, 0);
   const totalWorkload = users.reduce((s, u) => s + u.totalWorkload, 0);
+  const totalHours = users.reduce((s, u) => s + u.totalHours, 0);
   const avgCompactness =
     users.reduce((s, u) => s + u.avgSpread, 0) / Math.max(1, users.length);
-  const fs = users.map((u) => u.fairnessScore);
-  const legacyFairnessDelta = Math.max(...fs) - Math.min(...fs);
+  const wls = users.map((u) => u.totalWorkload);
+  const mean = wls.reduce((s, w) => s + w, 0) / Math.max(1, wls.length);
+  const variance =
+    wls.reduce((s, w) => s + (w - mean) ** 2, 0) / Math.max(1, wls.length);
+  const workloadStdDev = Math.sqrt(variance);
+  const workloadDelta = Math.max(...wls) - Math.min(...wls);
 
   return {
     users,
     tasks,
-    fairness,
+    coreTasks: core,
+    flexibleTasks: flexible,
+    priorityTasks: priority,
     overlapPenalty,
     overlapHotspots,
     totalDistance,
     totalWorkload,
+    totalHours,
     avgCompactness,
-    legacyFairnessDelta,
+    totalPriority: priority.length,
+    totalFlexible: flexible.length,
+    workloadStdDev,
+    workloadDelta,
     center,
     radiusKm,
   };
