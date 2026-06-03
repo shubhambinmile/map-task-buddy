@@ -1,225 +1,221 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
-import { LocationsMap } from "@/components/LocationsMap";
+import { useMemo, useState } from "react";
+import { LocationsMap, type MapFilters } from "@/components/LocationsMap";
 import {
-  CATEGORY_CONFIG,
   defaultOfficeLocation,
-  PRIORITY_CATEGORIES,
+  dispatchPriorityJob,
+  manualReserveDispatch,
+  PRIORITY_LABELS,
+  PRIORITY_COLORS,
   RADIUS_KM,
-  runSimulation,
-  type Category,
+  runV9Simulation,
+  simulateCompletion,
+  summary,
+  type EngineEvent,
   type LatLng,
+  type PriorityLevel,
+  type SimulationState,
 } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export const Route = createFileRoute("/")({
   component: Index,
   head: () => ({
     meta: [
-      { title: "V8 Territory Routing — Operational Dashboard" },
+      { title: "V9 Dispatch Engine — Workforce Operations Command Center" },
       {
         name: "description",
         content:
-          "V8 priority-aware territory optimization engine — visualize core territories, flexible assignments, and priority execution flow.",
+          "Operational dispatch dashboard for the V9 territory engine — regions, territories, capacity, priority dispatch, reserve flow, and event timeline.",
       },
     ],
   }),
 });
 
-const ALL_CATS: Category[] = ["A", "B", "C", "D"];
+function fmt(n: number, d = 2) {
+  return n.toFixed(d);
+}
 
 function Index() {
-  const [totalUsers, setTotalUsers] = useState(15);
-  const [totalTasks, setTotalTasks] = useState(250);
+  const [totalJobs, setTotalJobs] = useState(200);
+  const [totalInstallers, setTotalInstallers] = useState(12);
+  const [regionCount, setRegionCount] = useState(4);
   const [radiusKm, setRadiusKm] = useState(RADIUS_KM);
   const [center, setCenter] = useState<LatLng>(defaultOfficeLocation);
   const [pickMode, setPickMode] = useState(false);
   const [seed, setSeed] = useState(42);
 
   const [config, setConfig] = useState({
-    totalUsers,
-    totalTasks,
+    totalJobs,
+    totalInstallers,
+    regionCount,
     radiusKm,
     center,
     seed,
   });
+  const initial = useMemo(() => runV9Simulation(config), [config]);
+  const [state, setState] = useState<SimulationState>(initial);
+  // reset state when config changes
+  useMemo(() => {
+    setState(initial);
+  }, [initial]);
 
-  const simulation = useMemo(() => runSimulation(config), [config]);
+  const stats = useMemo(() => summary(state), [state]);
 
-  const [visible, setVisible] = useState<Set<string>>(
-    () => new Set(simulation.users.map((u) => u.id)),
-  );
-  const [cats, setCats] = useState<Set<Category>>(() => new Set(ALL_CATS));
-  const [showRoutes, setShowRoutes] = useState(true);
+  // map filters
+  const [regionFilter, setRegionFilter] = useState<string>("all");
+  const [installerFilter, setInstallerFilter] = useState<string>("all");
+  const [showRegions, setShowRegions] = useState(true);
   const [showTerritories, setShowTerritories] = useState(true);
-  const [showStopNumbers, setShowStopNumbers] = useState(true);
-  const [showOverlap, setShowOverlap] = useState(true);
-  const [showBorderTasks, setShowBorderTasks] = useState(false);
-  const [showSpread, setShowSpread] = useState(false);
+  const [showRoutes, setShowRoutes] = useState(true);
+  const [showCore, setShowCore] = useState(true);
+  const [showReserve, setShowReserve] = useState(true);
   const [showPriorityOnly, setShowPriorityOnly] = useState(false);
-  const [showFlexibleOnly, setShowFlexibleOnly] = useState(false);
-  const [highlightFlexible, setHighlightFlexible] = useState(true);
-  const [phasedRoutes, setPhasedRoutes] = useState(true);
+  const [showAnchors, setShowAnchors] = useState(false);
+  const [showBorders, setShowBorders] = useState(false);
 
-  const userIds = simulation.users.map((u) => u.id).join(",");
-  useEffect(() => {
-    setVisible(new Set(simulation.users.map((u) => u.id)));
-  }, [userIds]);
-
-  const toggleUser = (id: string) =>
-    setVisible((prev) => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-  const toggleCat = (c: Category) =>
-    setCats((prev) => {
-      const n = new Set(prev);
-      n.has(c) ? n.delete(c) : n.add(c);
-      return n;
-    });
-  const soloUser = (id: string) => setVisible(new Set([id]));
-
-  const distances = simulation.users.map((u) => u.totalRouteDistance);
-  const workloads = simulation.users.map((u) => u.totalWorkload);
-  const avgD = distances.reduce((s, d) => s + d, 0) / distances.length;
-  const avgW = workloads.reduce((s, d) => s + d, 0) / workloads.length;
-  const totalStops = simulation.users.reduce(
-    (s, u) => s + u.assignedTasks.length,
-    0,
-  );
-  const avgEff =
-    simulation.users.reduce((s, u) => s + u.efficiency, 0) /
-    Math.max(1, simulation.users.length);
-
-  const run = () =>
-    setConfig({ totalUsers, totalTasks, radiusKm, center, seed });
-
-  const newSeed = () => {
-    const s = Math.floor(Math.random() * 1_000_000);
-    setSeed(s);
-    setConfig({ totalUsers, totalTasks, radiusKm, center, seed: s });
+  const filters: MapFilters = {
+    regionId: regionFilter === "all" ? null : regionFilter,
+    installerId: installerFilter === "all" ? null : installerFilter,
+    showRegions,
+    showTerritories,
+    showRoutes,
+    showCore,
+    showReserve,
+    showPriorityOnly,
+    showAnchors,
+    showBorders,
   };
 
+  function regenerate() {
+    setConfig({ totalJobs, totalInstallers, regionCount, radiusKm, center, seed });
+  }
+  function pickCenter(c: LatLng) {
+    setCenter(c);
+    setPickMode(false);
+  }
+
+  // simulation controls
+  const [simInstaller, setSimInstaller] = useState<string>("");
+  const [newJobRegion, setNewJobRegion] = useState<string>("R1");
+  const [newJobWorkload, setNewJobWorkload] = useState<number>(1);
+  const [newJobPriority, setNewJobPriority] = useState<PriorityLevel>(4);
+
+  function applyCompletion(pct: number) {
+    if (!simInstaller) return;
+    setState((s) => simulateCompletion(s, simInstaller, pct));
+  }
+  function addPriority() {
+    setState((s) =>
+      dispatchPriorityJob(s, {
+        regionId: newJobRegion,
+        workload: newJobWorkload,
+        priorityLevel: newJobPriority,
+      }),
+    );
+  }
+  function runReserveDispatch() {
+    setState((s) => manualReserveDispatch(s));
+  }
+  function resetSim() {
+    setState(initial);
+  }
+
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/40 px-6 py-3 backdrop-blur">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            V8 Territory Routing — Operational Dashboard
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            {simulation.users.length} installers ·{" "}
-            {simulation.tasks.length} jobs ·{" "}
-            <span className="text-blue-500">
-              {simulation.totalPriority} priority
-            </span>{" "}
-            ·{" "}
-            <span className="text-muted-foreground">
-              {simulation.totalFlexible} flexible
-            </span>{" "}
-            · workload {simulation.totalWorkload.toFixed(1)} ·{" "}
-            {simulation.totalDistance.toFixed(0)} km · overlap{" "}
-            {simulation.overlapHotspots.length}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              setVisible(new Set(simulation.users.map((u) => u.id)))
-            }
-          >
-            Show all
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setVisible(new Set())}
-          >
-            Hide all
-          </Button>
-          <Button size="sm" variant="outline" onClick={newSeed}>
-            New jobs
-          </Button>
-          <Button size="sm" onClick={run}>
-            Recalculate
-          </Button>
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="border-b">
+        <div className="container mx-auto flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div>
+            <h1 className="text-lg font-bold tracking-tight">
+              V9 Dispatch Engine · Operations Command Center
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              Regions → Territories → Core/Reserve → Installer · Capacity-aware priority &amp; reserve dispatch
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">V9</Badge>
+            <Badge variant="outline">{state.totalJobs} jobs</Badge>
+            <Badge variant="outline">{state.totalInstallers} installers</Badge>
+            <Badge variant="outline">{state.regions.length} regions</Badge>
+          </div>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border bg-card/20">
-          <div className="flex-1 overflow-y-auto">
-            {/* Controls */}
-            <div className="space-y-3 border-b border-border p-3">
+      <div className="container mx-auto grid grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[320px_1fr]">
+        {/* Sidebar: configuration */}
+        <aside className="space-y-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Simulation Setup</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">Installers</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={totalUsers}
-                    onChange={(e) =>
-                      setTotalUsers(Math.max(1, Number(e.target.value) || 1))
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
+                <div>
                   <Label className="text-xs">Jobs</Label>
                   <Input
                     type="number"
-                    min={1}
-                    max={5000}
-                    value={totalTasks}
-                    onChange={(e) =>
-                      setTotalTasks(Math.max(1, Number(e.target.value) || 1))
-                    }
+                    value={totalJobs}
+                    min={10}
+                    max={1000}
+                    onChange={(e) => setTotalJobs(+e.target.value || 0)}
                   />
                 </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <Label>Radius</Label>
-                  <span className="tabular-nums text-muted-foreground">
-                    {radiusKm} km
-                  </span>
+                <div>
+                  <Label className="text-xs">Installers</Label>
+                  <Input
+                    type="number"
+                    value={totalInstallers}
+                    min={1}
+                    max={60}
+                    onChange={(e) => setTotalInstallers(+e.target.value || 1)}
+                  />
                 </div>
+                <div>
+                  <Label className="text-xs">Regions</Label>
+                  <Input
+                    type="number"
+                    value={regionCount}
+                    min={1}
+                    max={12}
+                    onChange={(e) => setRegionCount(+e.target.value || 1)}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Seed</Label>
+                  <Input type="number" value={seed} onChange={(e) => setSeed(+e.target.value || 0)} />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Radius (km): {radiusKm}</Label>
                 <Slider
-                  min={1}
-                  max={200}
-                  step={1}
                   value={[radiusKm]}
+                  min={5}
+                  max={200}
+                  step={5}
                   onValueChange={(v) => setRadiusKm(v[0])}
                 />
               </div>
-
               <div className="space-y-1">
-                <Label className="text-xs">Center (lat, lng)</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    value={center.lat}
-                    onChange={(e) =>
-                      setCenter({ ...center, lat: Number(e.target.value) })
-                    }
-                  />
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    value={center.lng}
-                    onChange={(e) =>
-                      setCenter({ ...center, lng: Number(e.target.value) })
-                    }
-                  />
+                <Label className="text-xs">Center</Label>
+                <div className="text-xs text-muted-foreground">
+                  {center.lat.toFixed(4)}, {center.lng.toFixed(4)}
                 </div>
                 <Button
                   size="sm"
@@ -227,349 +223,140 @@ function Index() {
                   className="w-full"
                   onClick={() => setPickMode((p) => !p)}
                 >
-                  {pickMode ? "Click on map…" : "Pick center on map"}
+                  {pickMode ? "Click map to set center…" : "Pick center on map"}
                 </Button>
               </div>
-
-              <Button size="sm" className="w-full" onClick={run}>
-                Run V8 optimization
+              <Button className="w-full" onClick={regenerate}>
+                Generate Simulation
               </Button>
-            </div>
+              <Button className="w-full" variant="outline" onClick={resetSim}>
+                Reset live state
+              </Button>
+            </CardContent>
+          </Card>
 
-            {/* Operational Analytics */}
-            <div className="space-y-2 border-b border-border p-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Operational analytics
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Map Filters</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-xs">
+              <div>
+                <Label className="text-xs">Region</Label>
+                <Select value={regionFilter} onValueChange={setRegionFilter}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All regions</SelectItem>
+                    {state.regions.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.id} ({r.jobs.length})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Stat
-                  label="Total workload"
-                  value={simulation.totalWorkload.toFixed(1)}
-                />
-                <Stat
-                  label="Total hours"
-                  value={`${simulation.totalHours.toFixed(0)}h`}
-                />
-                <Stat
-                  label="Total distance"
-                  value={`${simulation.totalDistance.toFixed(0)} km`}
-                />
-                <Stat label="Total stops" value={String(totalStops)} />
-                <Stat
-                  label="Priority jobs"
-                  value={String(simulation.totalPriority)}
-                  accent="#3b82f6"
-                />
-                <Stat
-                  label="Flexible jobs"
-                  value={String(simulation.totalFlexible)}
-                  accent="#a855f7"
-                />
-                <Stat label="Avg distance" value={`${avgD.toFixed(1)} km`} />
-                <Stat label="Avg workload" value={avgW.toFixed(2)} />
-                <Stat
-                  label="Compactness"
-                  value={`${simulation.avgCompactness.toFixed(2)} km`}
-                />
-                <Stat
-                  label="Workload Δ"
-                  value={simulation.workloadDelta.toFixed(1)}
-                  hint="max - min"
-                />
-                <Stat
-                  label="Workload σ"
-                  value={simulation.workloadStdDev.toFixed(2)}
-                  hint="std dev"
-                />
-                <Stat
-                  label="Efficiency"
-                  value={avgEff.toFixed(3)}
-                  hint="load / km"
-                />
+              <div>
+                <Label className="text-xs">Installer</Label>
+                <Select value={installerFilter} onValueChange={setInstallerFilter}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All installers</SelectItem>
+                    {state.installers.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>
+                        {i.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-
-            {/* Phase legend */}
-            <div className="space-y-1.5 border-b border-border p-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Route phases
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <div className="h-1 w-8 rounded bg-blue-500" />
-                <span className="font-medium text-blue-500">
-                  Priority phase
-                </span>
-                <span className="text-muted-foreground">
-                  ({PRIORITY_CATEGORIES.join(", ")})
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <div
-                  className="h-1 w-8 rounded"
-                  style={{
-                    background:
-                      "repeating-linear-gradient(90deg, hsl(var(--muted-foreground)) 0 4px, transparent 4px 8px)",
-                  }}
-                />
-                <span className="font-medium">Normal phase</span>
-                <span className="text-muted-foreground">
-                  (dashed segment)
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <div className="h-3 w-3 rounded-full border-2 border-blue-500 bg-blue-500/40" />
-                <span>Priority job</span>
-                <span className="ml-auto h-3 w-3 rounded-full border border-dashed border-foreground/60" />
-                <span>Flexible</span>
-              </div>
-            </div>
-
-            {/* Layer toggles */}
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-b border-border p-3 text-xs">
-              <ToggleRow
-                label="Phased routes"
-                checked={phasedRoutes}
-                onChange={setPhasedRoutes}
-              />
-              <ToggleRow
-                label="Routes"
-                checked={showRoutes}
-                onChange={setShowRoutes}
-              />
-              <ToggleRow
-                label="Territories"
-                checked={showTerritories}
-                onChange={setShowTerritories}
-              />
-              <ToggleRow
-                label="Spread"
-                checked={showSpread}
-                onChange={setShowSpread}
-              />
-              <ToggleRow
-                label="Overlap"
-                checked={showOverlap}
-                onChange={setShowOverlap}
-              />
-              <ToggleRow
-                label="Border tasks"
-                checked={showBorderTasks}
-                onChange={setShowBorderTasks}
-              />
-              <ToggleRow
-                label="Stop #"
-                checked={showStopNumbers}
-                onChange={setShowStopNumbers}
-              />
-              <ToggleRow
-                label="Mark flexible"
-                checked={highlightFlexible}
-                onChange={setHighlightFlexible}
-              />
-              <ToggleRow
-                label="Priority only"
-                checked={showPriorityOnly}
-                onChange={(v) => {
-                  setShowPriorityOnly(v);
-                  if (v) setShowFlexibleOnly(false);
-                }}
-              />
-              <ToggleRow
-                label="Flexible only"
-                checked={showFlexibleOnly}
-                onChange={(v) => {
-                  setShowFlexibleOnly(v);
-                  if (v) setShowPriorityOnly(false);
-                }}
-              />
-            </div>
-
-            {/* Category filters */}
-            <div className="border-b border-border p-3">
-              <div className="mb-2 text-xs font-medium">Categories</div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {ALL_CATS.map((c) => {
-                  const cfg = CATEGORY_CONFIG[c];
-                  const on = cats.has(c);
-                  const isPri = PRIORITY_CATEGORIES.includes(c);
-                  return (
-                    <button
-                      key={c}
-                      onClick={() => toggleCat(c)}
-                      className={`flex items-center justify-between rounded border px-2 py-1 text-xs transition ${
-                        on ? "bg-accent/40" : "opacity-40"
-                      } ${isPri ? "border-blue-500/60" : "border-border"}`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          className="h-2.5 w-2.5 rounded-full"
-                          style={{ background: cfg.color }}
-                        />
-                        <span className="font-medium">{c}</span>
-                        {isPri && (
-                          <span className="rounded bg-blue-500/20 px-1 text-[9px] font-bold text-blue-500">
-                            PRI
-                          </span>
-                        )}
-                      </span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {cfg.avgHours}h ×{cfg.weight}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Users table */}
-            <div>
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-card">
-                  <tr className="border-b border-border text-left">
-                    <th className="px-2 py-2"></th>
-                    <th className="px-2 py-2">User</th>
-                    <th className="px-2 py-2 text-right">Jobs</th>
-                    <th className="px-2 py-2 text-right" title="Priority jobs">
-                      Pri
-                    </th>
-                    <th className="px-2 py-2 text-right" title="Flexible jobs">
-                      Flx
-                    </th>
-                    <th className="px-2 py-2 text-right">Load</th>
-                    <th className="px-2 py-2 text-right">Km</th>
-                    <th className="px-2 py-2 text-right" title="Avg spread">
-                      Spr
-                    </th>
-                    <th className="px-2 py-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simulation.users.map((u) => {
-                    const on = visible.has(u.id);
-                    const cb = u.categoryBreakdown;
-                    return (
-                      <tr
-                        key={u.id}
-                        className={`border-b border-border/60 ${
-                          on ? "" : "opacity-40"
-                        } hover:bg-accent/40`}
-                      >
-                        <td
-                          className="cursor-pointer px-2 py-1.5"
-                          onClick={() => toggleUser(u.id)}
-                        >
-                          <span
-                            className="inline-block h-3 w-3 rounded-sm"
-                            style={{ background: u.color }}
-                          />
-                        </td>
-                        <td
-                          className="cursor-pointer px-2 py-1.5 font-medium"
-                          onClick={() => toggleUser(u.id)}
-                          title={`A:${cb.A} B:${cb.B} C:${cb.C} D:${cb.D} · return ${u.returnDistance.toFixed(1)}km · ${u.totalHours.toFixed(0)}h · eff ${u.efficiency.toFixed(3)}`}
-                        >
-                          {u.id}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">
-                          {u.assignedTasks.length}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-blue-500">
-                          {u.priorityCount}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-purple-500">
-                          {u.flexibleCount}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">
-                          {u.totalWorkload.toFixed(1)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">
-                          {u.totalRouteDistance.toFixed(0)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                          {u.avgSpread.toFixed(1)}
-                        </td>
-                        <td className="px-1 py-1">
-                          <button
-                            onClick={() => soloUser(u.id)}
-                            className="rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-accent"
-                            title="Solo this user"
-                          >
-                            solo
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+              <Toggle label="Regions" checked={showRegions} onChange={setShowRegions} />
+              <Toggle label="Territories" checked={showTerritories} onChange={setShowTerritories} />
+              <Toggle label="Routes" checked={showRoutes} onChange={setShowRoutes} />
+              <Toggle label="Core jobs" checked={showCore} onChange={setShowCore} />
+              <Toggle label="Reserve jobs" checked={showReserve} onChange={setShowReserve} />
+              <Toggle label="Priority only" checked={showPriorityOnly} onChange={setShowPriorityOnly} />
+              <Toggle label="Anchor rings" checked={showAnchors} onChange={setShowAnchors} />
+              <Toggle label="Border rings" checked={showBorders} onChange={setShowBorders} />
+            </CardContent>
+          </Card>
         </aside>
 
-        <main className="relative flex-1">
-          {pickMode && (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[1000] -translate-x-1/2 rounded-md bg-foreground/90 px-3 py-1 text-xs text-background shadow">
-              Click on the map to set the center
-            </div>
-          )}
-          <LocationsMap
-            simulation={simulation}
-            visibleUsers={visible}
-            visibleCategories={cats}
-            showRoutes={showRoutes}
-            showTerritories={showTerritories}
-            showStopNumbers={showStopNumbers}
-            showOverlap={showOverlap}
-            showBorderTasks={showBorderTasks}
-            showSpread={showSpread}
-            showPriorityOnly={showPriorityOnly}
-            showFlexibleOnly={showFlexibleOnly}
-            highlightFlexible={highlightFlexible}
-            phasedRoutes={phasedRoutes}
-            center={config.center}
-            radiusKm={config.radiusKm}
-            pickMode={pickMode}
-            onPickCenter={(c) => {
-              setCenter(c);
-              setPickMode(false);
-            }}
-          />
+        {/* Main */}
+        <main className="space-y-4 min-w-0">
+          <KpiRow stats={stats} state={state} />
+          <Tabs defaultValue="map">
+            <TabsList className="flex flex-wrap">
+              <TabsTrigger value="map">Map</TabsTrigger>
+              <TabsTrigger value="installers">Installers</TabsTrigger>
+              <TabsTrigger value="territories">Territories</TabsTrigger>
+              <TabsTrigger value="priority">Priority Queue</TabsTrigger>
+              <TabsTrigger value="reserve">Reserve</TabsTrigger>
+              <TabsTrigger value="timeline">Event Timeline</TabsTrigger>
+              <TabsTrigger value="simulate">Simulation</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="map">
+              <Card>
+                <CardContent className="p-0">
+                  <div className="h-[640px] w-full overflow-hidden rounded-md">
+                    <LocationsMap
+                      state={state}
+                      filters={filters}
+                      pickMode={pickMode}
+                      onPickCenter={pickCenter}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="installers">
+              <InstallersPanel state={state} onSelect={setInstallerFilter} />
+            </TabsContent>
+
+            <TabsContent value="territories">
+              <TerritoriesPanel state={state} onSelectRegion={setRegionFilter} />
+            </TabsContent>
+
+            <TabsContent value="priority">
+              <PriorityPanel state={state} />
+            </TabsContent>
+
+            <TabsContent value="reserve">
+              <ReservePanel state={state} />
+            </TabsContent>
+
+            <TabsContent value="timeline">
+              <TimelinePanel events={state.events} />
+            </TabsContent>
+
+            <TabsContent value="simulate">
+              <SimulationPanel
+                state={state}
+                simInstaller={simInstaller}
+                setSimInstaller={setSimInstaller}
+                onComplete={applyCompletion}
+                newJobRegion={newJobRegion}
+                setNewJobRegion={setNewJobRegion}
+                newJobWorkload={newJobWorkload}
+                setNewJobWorkload={setNewJobWorkload}
+                newJobPriority={newJobPriority}
+                setNewJobPriority={setNewJobPriority}
+                onAddPriority={addPriority}
+                onRunReserveDispatch={runReserveDispatch}
+              />
+            </TabsContent>
+          </Tabs>
         </main>
       </div>
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
-  accent,
-  hint,
-}: {
-  label: string;
-  value: string;
-  accent?: string;
-  hint?: string;
-}) {
-  return (
-    <div
-      className="rounded-md border border-border bg-card/40 px-2 py-1.5"
-      title={hint}
-    >
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div
-        className="font-semibold tabular-nums"
-        style={accent ? { color: accent } : undefined}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function ToggleRow({
+function Toggle({
   label,
   checked,
   onChange,
@@ -582,6 +369,552 @@ function ToggleRow({
     <div className="flex items-center justify-between">
       <Label className="text-xs">{label}</Label>
       <Switch checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "warn" | "danger" | "ok";
+}) {
+  const toneClass =
+    tone === "warn"
+      ? "border-amber-500/40"
+      : tone === "danger"
+        ? "border-red-500/40"
+        : tone === "ok"
+          ? "border-emerald-500/40"
+          : "";
+  return (
+    <Card className={`flex-1 min-w-[140px] ${toneClass}`}>
+      <CardContent className="p-3">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
+        <div className="text-2xl font-bold tabular-nums">{value}</div>
+        {hint && <div className="text-[10px] text-muted-foreground">{hint}</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function KpiRow({
+  stats,
+  state,
+}: {
+  stats: ReturnType<typeof summary>;
+  state: SimulationState;
+}) {
+  const util = (stats.capacityUtilization * 100).toFixed(0) + "%";
+  const reservePct =
+    stats.coreJobs + stats.reserveJobs > 0
+      ? (stats.reserveJobs / (stats.coreJobs + stats.reserveJobs)) * 100
+      : 0;
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Kpi label="Total Jobs" value={String(state.jobs.length)} />
+      <Kpi
+        label="Core / Reserve"
+        value={`${stats.coreJobs} / ${stats.reserveJobs}`}
+        hint={`${reservePct.toFixed(0)}% reserve`}
+      />
+      <Kpi
+        label="Workload (core)"
+        value={fmt(stats.coreWorkload, 1)}
+        hint={`remaining ${fmt(stats.totalRemaining, 1)}`}
+      />
+      <Kpi
+        label="Capacity Utilization"
+        value={util}
+        tone={stats.capacityUtilization >= 0.9 ? "danger" : stats.capacityUtilization >= 0.75 ? "warn" : "ok"}
+      />
+      <Kpi
+        label="Reserve Eligible"
+        value={String(stats.eligible)}
+        tone={stats.eligible > 0 ? "ok" : "default"}
+      />
+      <Kpi
+        label="Overloaded"
+        value={String(stats.overloaded)}
+        tone={stats.overloaded > 0 ? "danger" : "default"}
+      />
+      <Kpi label="Capacity Blocks" value={String(state.capacityBlocks)} tone={state.capacityBlocks > 0 ? "warn" : "default"} />
+      <Kpi label="Priority Dispatched" value={String(state.dispatchMetrics.PRIORITY)} />
+      <Kpi label="Route Distance" value={`${fmt(stats.routeDistance, 0)} km`} />
+    </div>
+  );
+}
+
+function InstallersPanel({
+  state,
+  onSelect,
+}: {
+  state: SimulationState;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <ScrollArea className="h-[640px]">
+          <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+            {state.installers.map((i) => {
+              const territory = state.territories.find((t) => t.id === i.territoryId);
+              const completionPct =
+                i.assignedWorkload > 0
+                  ? (i.completedWorkload / i.assignedWorkload) * 100
+                  : 0;
+              const toneBg =
+                i.capacityStatus === "FULL"
+                  ? "bg-red-500/10"
+                  : i.capacityStatus === "WARNING"
+                    ? "bg-amber-500/10"
+                    : "bg-emerald-500/10";
+              return (
+                <Card key={i.id} className="overflow-hidden">
+                  <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full" style={{ background: i.color }} />
+                      <CardTitle className="text-sm">{i.id}</CardTitle>
+                      <Badge variant="outline" className="text-[10px]">
+                        {i.regionId ?? "—"}
+                      </Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {i.territoryId ?? "—"}
+                      </Badge>
+                    </div>
+                    <div className="flex gap-1">
+                      {i.eligible && <Badge className="bg-emerald-600 text-[10px]">RESERVE OK</Badge>}
+                      <Badge className={`text-[10px] ${toneBg}`} variant="outline">
+                        {i.capacityStatus}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-2 p-3 pt-0 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Assigned</span>
+                      <span className="tabular-nums font-semibold">{fmt(i.assignedWorkload)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Completed</span>
+                      <span className="tabular-nums">{fmt(i.completedWorkload)}</span>
+                    </div>
+                    <Progress value={completionPct} className="h-1.5" />
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Remaining</span>
+                      <span className="tabular-nums">{fmt(i.remainingWorkload)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Capacity</span>
+                      <span className="tabular-nums">
+                        {fmt(i.assignedWorkload, 1)} / {i.shiftCapacity}
+                      </span>
+                    </div>
+                    <Progress
+                      value={i.utilization * 100}
+                      className={`h-1.5 ${
+                        i.capacityStatus === "FULL"
+                          ? "[&>div]:bg-red-500"
+                          : i.capacityStatus === "WARNING"
+                            ? "[&>div]:bg-amber-500"
+                            : "[&>div]:bg-emerald-500"
+                      }`}
+                    />
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Availability</span>
+                      <span className="tabular-nums">{fmt(i.availabilityScore, 3)}</span>
+                    </div>
+                    {territory && (
+                      <div className="rounded border bg-muted/30 p-2">
+                        <div className="text-[10px] text-muted-foreground">Territory</div>
+                        <div>
+                          {territory.coreJobs.length} core · {territory.reserveJobs.length} reserve · route{" "}
+                          {fmt(territory.routeDistance, 1)}km
+                        </div>
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => onSelect(i.id)}
+                    >
+                      Show on map
+                    </Button>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </ScrollArea>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TerritoriesPanel({
+  state,
+  onSelectRegion,
+}: {
+  state: SimulationState;
+  onSelectRegion: (id: string) => void;
+}) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <ScrollArea className="h-[640px]">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-background">
+              <tr className="border-b text-left">
+                <th className="p-2">Territory</th>
+                <th>Region</th>
+                <th>Owner</th>
+                <th>Jobs</th>
+                <th>Core</th>
+                <th>Reserve</th>
+                <th>Workload</th>
+                <th>Route km</th>
+                <th>Eff (wl/km)</th>
+                <th>Anchors</th>
+                <th>Borders</th>
+                <th>Spread km</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.territories.map((t) => {
+                const installer = state.installers.find((i) => i.id === t.installerId);
+                return (
+                  <tr key={t.id} className="border-b hover:bg-muted/40">
+                    <td className="p-2 font-mono font-semibold">
+                      <span
+                        className="mr-2 inline-block h-2 w-2 rounded-full"
+                        style={{ background: installer?.color ?? "#888" }}
+                      />
+                      {t.id}
+                    </td>
+                    <td>{t.regionId}</td>
+                    <td>{t.ownerInstallerId}</td>
+                    <td>{t.jobs.length}</td>
+                    <td>{t.coreJobs.length}</td>
+                    <td>{t.reserveJobs.length}</td>
+                    <td className="tabular-nums">{fmt(t.workload)}</td>
+                    <td className="tabular-nums">{fmt(t.routeDistance, 1)}</td>
+                    <td className="tabular-nums">{fmt(t.efficiency, 2)}</td>
+                    <td>{t.anchorJobs.length}</td>
+                    <td>{t.borderJobs.length}</td>
+                    <td className="tabular-nums">{fmt(t.spread, 1)}</td>
+                    <td>
+                      <Button size="sm" variant="ghost" onClick={() => onSelectRegion(t.regionId)}>
+                        View
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </ScrollArea>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PriorityPanel({ state }: { state: SimulationState }) {
+  const list = state.priorityAssignments;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Priority Dispatches ({list.length})</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {list.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            No priority dispatches yet. Use the Simulation tab to inject a live priority job.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {list.map((p) => (
+              <div key={p.id} className="rounded border p-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="rounded px-1.5 py-0.5 text-[10px] font-bold text-white"
+                      style={{ background: PRIORITY_COLORS[p.priorityLevel] }}
+                    >
+                      {PRIORITY_LABELS[p.priorityLevel]}
+                    </span>
+                    <span className="font-mono font-semibold">{p.jobId}</span>
+                    <Badge variant="outline">{p.regionId}</Badge>
+                  </div>
+                  <Badge>{p.dispatchPath}</Badge>
+                </div>
+                <div className="mt-1 grid grid-cols-4 gap-2 text-[11px] text-muted-foreground">
+                  <div>→ {p.assignedTo}</div>
+                  <div>wl {fmt(p.workload)}</div>
+                  <div>score {fmt(p.score, 3)}</div>
+                  <div>t {p.createdAt}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReservePanel({ state }: { state: SimulationState }) {
+  const list = state.reserveAssignments;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Reserve / Auto-Reserve Dispatches ({list.length})</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {list.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            No reserve activity yet. Complete an installer's workload to trigger auto-reserve, or run
+            manual reserve dispatch from the Simulation tab.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {list.map((r) => (
+              <div key={r.id} className="rounded border p-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={r.dispatchType === "AUTO_RESERVE" ? "default" : "secondary"}>
+                      {r.dispatchType}
+                    </Badge>
+                    <span className="font-mono font-semibold">{r.territoryId}</span>
+                    {r.temporaryAssignment && (
+                      <Badge variant="outline" className="border-amber-500/50 text-amber-600">
+                        TEMPORARY
+                      </Badge>
+                    )}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground">t {r.createdAt}</span>
+                </div>
+                <div className="mt-1 grid grid-cols-4 gap-2 text-[11px] text-muted-foreground">
+                  <div>owner {r.territoryOwner}</div>
+                  <div>→ {r.assignedTo}</div>
+                  <div>wl {fmt(r.workload)}</div>
+                  <div>score {fmt(r.score, 3)}</div>
+                </div>
+                <div className="mt-1 text-[11px]">jobs: {r.jobIds.join(", ")}</div>
+                <div className="text-[11px] text-muted-foreground">reason: {r.reason}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function eventLabel(e: EngineEvent) {
+  switch (e.kind) {
+    case "JOB_ARRIVAL":
+      return { label: "JOB ARRIVAL", color: "#3b82f6" };
+    case "PRIORITY_DISPATCH":
+      return { label: "PRIORITY DISPATCH", color: "#ef4444" };
+    case "RESERVE_RELEASE":
+      return { label: "RESERVE RELEASE", color: "#8b5cf6" };
+    case "AUTO_RESERVE":
+      return { label: "AUTO RESERVE", color: "#10b981" };
+    case "COMPLETION":
+      return { label: "COMPLETION", color: "#22c55e" };
+    case "CAPACITY_BLOCK":
+      return { label: "CAPACITY BLOCK", color: "#f59e0b" };
+    case "RESERVE_DISPATCH":
+      return { label: "RESERVE DISPATCH", color: "#a855f7" };
+  }
+}
+
+function TimelinePanel({ events }: { events: EngineEvent[] }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Event Timeline ({events.length})</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {events.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            No events yet. Trigger completions or priority jobs to populate the timeline.
+          </div>
+        ) : (
+          <ScrollArea className="h-[560px] pr-3">
+            <div className="space-y-1.5">
+              {[...events].reverse().map((e, idx) => {
+                const meta = eventLabel(e);
+                return (
+                  <div key={idx} className="flex items-start gap-2 rounded border p-2 text-xs">
+                    <span
+                      className="rounded px-1.5 py-0.5 text-[10px] font-bold text-white"
+                      style={{ background: meta.color }}
+                    >
+                      {meta.label}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">t={e.t}</span>
+                    <span className="flex-1">
+                      {e.kind === "JOB_ARRIVAL" &&
+                        `${e.jobId} · ${PRIORITY_LABELS[e.priorityLevel]} · ${e.regionId} · wl ${e.workload}`}
+                      {e.kind === "PRIORITY_DISPATCH" &&
+                        `${e.jobId} → ${e.installerId} via ${e.dispatchPath} (score ${fmt(e.score, 3)})`}
+                      {e.kind === "RESERVE_RELEASE" &&
+                        `${e.installerId} released ${e.jobIds.length} jobs from ${e.territoryId}`}
+                      {e.kind === "AUTO_RESERVE" &&
+                        `${e.installerId} auto-assigned ${e.jobId} (score ${fmt(e.score, 3)})`}
+                      {e.kind === "COMPLETION" &&
+                        `${e.installerId} completed ${fmt(e.completedWorkload)} · remaining ${fmt(e.remainingWorkload)}`}
+                      {e.kind === "CAPACITY_BLOCK" &&
+                        `${e.installerId} BLOCKED — needed ${fmt(e.required)} but ${fmt(e.available)} available${e.jobId ? ` (${e.jobId})` : ""}`}
+                      {e.kind === "RESERVE_DISPATCH" &&
+                        `${e.territoryId} → ${e.installerId} (score ${fmt(e.score, 3)}) jobs ${e.jobIds.join(",")}`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SimulationPanel({
+  state,
+  simInstaller,
+  setSimInstaller,
+  onComplete,
+  newJobRegion,
+  setNewJobRegion,
+  newJobWorkload,
+  setNewJobWorkload,
+  newJobPriority,
+  setNewJobPriority,
+  onAddPriority,
+  onRunReserveDispatch,
+}: {
+  state: SimulationState;
+  simInstaller: string;
+  setSimInstaller: (v: string) => void;
+  onComplete: (pct: number) => void;
+  newJobRegion: string;
+  setNewJobRegion: (v: string) => void;
+  newJobWorkload: number;
+  setNewJobWorkload: (v: number) => void;
+  newJobPriority: PriorityLevel;
+  setNewJobPriority: (v: PriorityLevel) => void;
+  onAddPriority: () => void;
+  onRunReserveDispatch: () => void;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-3">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Complete Workload</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label className="text-xs">Installer</Label>
+          <Select value={simInstaller} onValueChange={setSimInstaller}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue placeholder="Select installer…" />
+            </SelectTrigger>
+            <SelectContent>
+              {state.installers.map((i) => (
+                <SelectItem key={i.id} value={i.id}>
+                  {i.id} ({fmt(i.remainingWorkload)} left)
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="grid grid-cols-4 gap-1 pt-2">
+            {[0.25, 0.5, 0.75, 1].map((p) => (
+              <Button key={p} size="sm" variant="outline" onClick={() => onComplete(p)}>
+                {p * 100}%
+              </Button>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Completing ≥ 80% makes the installer reserve-eligible. Auto-reserve will then attempt to
+            release additional work.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Inject Live Priority Job</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label className="text-xs">Region</Label>
+          <Select value={newJobRegion} onValueChange={setNewJobRegion}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {state.regions.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Label className="text-xs">Priority</Label>
+          <Select
+            value={String(newJobPriority)}
+            onValueChange={(v) => setNewJobPriority(Number(v) as PriorityLevel)}
+          >
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {([4, 3, 1, 2, 5] as PriorityLevel[]).map((p) => (
+                <SelectItem key={p} value={String(p)}>
+                  {PRIORITY_LABELS[p]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Label className="text-xs">Workload: {newJobWorkload}</Label>
+          <Slider
+            value={[newJobWorkload]}
+            min={0.25}
+            max={4}
+            step={0.25}
+            onValueChange={(v) => setNewJobWorkload(v[0])}
+          />
+          <Button className="w-full" onClick={onAddPriority}>
+            Dispatch priority job
+          </Button>
+          <p className="text-[11px] text-muted-foreground">
+            Engine tries same-region first, then neighbor regions, then global. Watch the timeline.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Manual Reserve Dispatch</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Run a system-wide reserve dispatch sweep. Releases reserve jobs into eligible installers
+            using owner → same-region → neighbor-region hierarchy.
+          </p>
+          <Button className="w-full" onClick={onRunReserveDispatch}>
+            Run reserve dispatch
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

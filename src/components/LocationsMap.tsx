@@ -1,11 +1,11 @@
-import { Fragment as FragmentWithKey, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CATEGORY_CONFIG,
-  type Category,
+  PRIORITY_COLORS,
   type LatLng,
-  type Simulation,
-  type Task,
-  type User,
+  type Region,
+  type SimulationState,
+  type Territory,
 } from "@/lib/routing";
 
 type LeafletMods = {
@@ -37,40 +37,27 @@ function ClickHandler({
   return null;
 }
 
+export type MapFilters = {
+  regionId?: string | null;
+  installerId?: string | null;
+  showRegions: boolean;
+  showTerritories: boolean;
+  showRoutes: boolean;
+  showReserve: boolean;
+  showCore: boolean;
+  showPriorityOnly: boolean;
+  showAnchors: boolean;
+  showBorders: boolean;
+};
+
 export function LocationsMap({
-  simulation,
-  visibleUsers,
-  visibleCategories,
-  showRoutes,
-  showTerritories,
-  showStopNumbers,
-  showOverlap,
-  showBorderTasks,
-  showSpread,
-  showPriorityOnly,
-  showFlexibleOnly,
-  highlightFlexible,
-  phasedRoutes,
-  center,
-  radiusKm,
+  state,
+  filters,
   pickMode,
   onPickCenter,
 }: {
-  simulation: Simulation;
-  visibleUsers: Set<string>;
-  visibleCategories: Set<Category>;
-  showRoutes: boolean;
-  showTerritories: boolean;
-  showStopNumbers: boolean;
-  showOverlap: boolean;
-  showBorderTasks: boolean;
-  showSpread: boolean;
-  showPriorityOnly: boolean;
-  showFlexibleOnly: boolean;
-  highlightFlexible: boolean;
-  phasedRoutes: boolean;
-  center: LatLng;
-  radiusKm: number;
+  state: SimulationState;
+  filters: MapFilters;
   pickMode?: boolean;
   onPickCenter?: (c: LatLng) => void;
 }) {
@@ -106,16 +93,9 @@ export function LocationsMap({
     if (!L) return null;
     return L.divIcon({
       className: "",
-      html: `<div style="
-        background:hsl(var(--background));
-        border:3px solid hsl(var(--foreground));
-        width:24px;height:24px;border-radius:50%;
-        box-shadow:0 0 0 4px rgba(0,0,0,.18);
-        display:flex;align-items:center;justify-content:center;
-        font-size:11px;font-weight:700;color:hsl(var(--foreground));
-      ">⌂</div>`,
-      iconSize: [24, 24],
-      iconAnchor: [12, 12],
+      html: `<div style="background:white;border:3px solid #111;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#111;box-shadow:0 0 0 4px rgba(0,0,0,.15)">B</div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
     });
   }, [L]);
 
@@ -137,333 +117,270 @@ export function LocationsMap({
     Circle,
     Tooltip,
     useMapEvents,
-    divIcon,
   } = L;
 
-  const visible = simulation.users.filter((u) => visibleUsers.has(u.id));
+  const installerColorById = new Map(state.installers.map((i) => [i.id, i.color]));
+  const territoryById = new Map(state.territories.map((t) => [t.id, t]));
 
-  const radiusByCat: Record<Category, number> = {
-    A: 3,
-    C: 4,
-    B: 6,
-    D: 7,
-  };
-
-  const passTaskFilter = (t: Task) => {
-    if (!visibleCategories.has(t.category)) return false;
-    if (showPriorityOnly && !t.isPriority) return false;
-    if (showFlexibleOnly && t.isCore) return false;
+  const visibleTerritory = (t: Territory) => {
+    if (filters.regionId && t.regionId !== filters.regionId) return false;
+    if (filters.installerId && t.installerId !== filters.installerId) return false;
     return true;
   };
+  const visibleRegion = (r: Region) =>
+    !filters.regionId || r.id === filters.regionId;
 
   return (
     <MapContainer
-      center={[center.lat, center.lng]}
+      center={[state.center.lat, state.center.lng]}
       zoom={9}
       preferCanvas
-      style={{
-        height: "100%",
-        width: "100%",
-        cursor: pickMode ? "crosshair" : undefined,
-      }}
+      style={{ height: "100%", width: "100%", cursor: pickMode ? "crosshair" : undefined }}
     >
       <TileLayer
         attribution="&copy; OpenStreetMap"
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-
-      {pickMode && (
-        <ClickHandler useMapEvents={useMapEvents} onPick={onPickCenter} />
-      )}
+      {pickMode && <ClickHandler useMapEvents={useMapEvents} onPick={onPickCenter} />}
 
       <Circle
-        center={[center.lat, center.lng]}
-        radius={radiusKm * 1000}
-        pathOptions={{
-          color: "hsl(var(--foreground))",
-          weight: 1,
-          opacity: 0.4,
-          fillOpacity: 0.03,
-          dashArray: "4 4",
-        }}
+        center={[state.center.lat, state.center.lng]}
+        radius={state.radiusKm * 1000}
+        pathOptions={{ color: "#444", weight: 1, opacity: 0.35, fillOpacity: 0.02, dashArray: "4 4" }}
       />
 
-      {/* Territory hulls */}
-      {showTerritories &&
-        visible.map((u: User) =>
-          u.hull.length >= 3 ? (
-            <Polygon
-              key={`hull-${u.id}`}
-              positions={u.hull.map((p) => [p.lat, p.lng]) as [number, number][]}
-              pathOptions={{
-                color: u.color,
-                weight: 1.5,
-                opacity: 0.7,
-                fillColor: u.color,
-                fillOpacity: 0.1,
-              }}
-            />
-          ) : null,
-        )}
-
-      {/* Routes — phased: priority solid+thick, normal dashed */}
-      {showRoutes &&
-        visible.map((u: User) => {
-          if (phasedRoutes) {
-            const pri: [number, number][] = [
-              [center.lat, center.lng],
-              ...u.priorityRoute.map(
-                (t) => [t.location.lat, t.location.lng] as [number, number],
-              ),
-            ];
-            const handoff = u.priorityRoute.length
-              ? u.priorityRoute[u.priorityRoute.length - 1].location
-              : center;
-            const norm: [number, number][] = [
-              [handoff.lat, handoff.lng],
-              ...u.normalRoute.map(
-                (t) => [t.location.lat, t.location.lng] as [number, number],
-              ),
-              [center.lat, center.lng],
-            ];
-            return (
-              <FragmentWithKey key={`g-${u.id}`}>
-                {pri.length >= 2 && (
-                  <Polyline
-                    key={`pri-${u.id}`}
-                    positions={pri}
-                    pathOptions={{
-                      color: u.color,
-                      weight: 4,
-                      opacity: 0.95,
-                    }}
-                  />
-                )}
-                {norm.length >= 2 && (
-                  <Polyline
-                    key={`nor-${u.id}`}
-                    positions={norm}
-                    pathOptions={{
-                      color: u.color,
-                      weight: 2,
-                      opacity: 0.7,
-                      dashArray: "6 6",
-                    }}
-                  />
-                )}
-              </FragmentWithKey>
-            );
+      {/* Regions (convex hull on all region jobs) */}
+      {filters.showRegions &&
+        state.regions.filter(visibleRegion).map((r) => {
+          const pts = r.jobs.map((j) => ({ lat: j.lat, lng: j.lng }));
+          if (pts.length < 3) return null;
+          // simple convex hull via Andrew's monotone chain inline
+          const sorted = [...pts].sort((a, b) =>
+            a.lng === b.lng ? a.lat - b.lat : a.lng - b.lng,
+          );
+          const cross = (o: LatLng, a: LatLng, b: LatLng) =>
+            (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
+          const lower: LatLng[] = [];
+          for (const p of sorted) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
+              lower.pop();
+            lower.push(p);
           }
-          const pts: [number, number][] = [
-            [center.lat, center.lng],
-            ...u.optimizedRoute.map(
-              (t) => [t.location.lat, t.location.lng] as [number, number],
-            ),
-            [center.lat, center.lng],
+          const upper: LatLng[] = [];
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            const p = sorted[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
+              upper.pop();
+            upper.push(p);
+          }
+          upper.pop();
+          lower.pop();
+          const hull = lower.concat(upper);
+          return (
+            <Polygon
+              key={`region-${r.id}`}
+              positions={hull.map((p) => [p.lat, p.lng]) as [number, number][]}
+              pathOptions={{
+                color: r.color,
+                weight: 2,
+                opacity: 0.6,
+                fillColor: r.color,
+                fillOpacity: 0.05,
+                dashArray: "6 6",
+              }}
+            >
+              <Tooltip>
+                <div className="text-xs font-semibold">{r.id}</div>
+                <div className="text-xs">{r.jobs.length} jobs · {r.installerCount} installers</div>
+              </Tooltip>
+            </Polygon>
+          );
+        })}
+
+      {/* Territory hulls */}
+      {filters.showTerritories &&
+        state.territories.filter(visibleTerritory).map((t) => {
+          if (t.jobs.length < 3) return null;
+          const pts = t.jobs.map((j) => ({ lat: j.lat, lng: j.lng }));
+          const sorted = [...pts].sort((a, b) =>
+            a.lng === b.lng ? a.lat - b.lat : a.lng - b.lng,
+          );
+          const cross = (o: LatLng, a: LatLng, b: LatLng) =>
+            (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
+          const lower: LatLng[] = [];
+          for (const p of sorted) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
+              lower.pop();
+            lower.push(p);
+          }
+          const upper: LatLng[] = [];
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            const p = sorted[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
+              upper.pop();
+            upper.push(p);
+          }
+          upper.pop();
+          lower.pop();
+          const hull = lower.concat(upper);
+          const color = installerColorById.get(t.installerId) ?? "#888";
+          return (
+            <Polygon
+              key={`terr-${t.id}`}
+              positions={hull.map((p) => [p.lat, p.lng]) as [number, number][]}
+              pathOptions={{
+                color,
+                weight: 1.5,
+                opacity: 0.8,
+                fillColor: color,
+                fillOpacity: 0.08,
+              }}
+            >
+              <Tooltip>
+                <div className="text-xs font-semibold">{t.id}</div>
+                <div className="text-xs">Owner: {t.ownerInstallerId}</div>
+                <div className="text-xs">
+                  {t.coreJobs.length} core · {t.reserveJobs.length} reserve
+                </div>
+                <div className="text-xs">Workload: {t.workload.toFixed(2)}</div>
+              </Tooltip>
+            </Polygon>
+          );
+        })}
+
+      {/* Optimized core routes */}
+      {filters.showRoutes &&
+        state.territories.filter(visibleTerritory).map((t) => {
+          if (t.optimizedRoute.length < 2) return null;
+          const color = installerColorById.get(t.installerId) ?? "#888";
+          const positions = [
+            [t.center.lat, t.center.lng] as [number, number],
+            ...t.optimizedRoute.map((j) => [j.lat, j.lng] as [number, number]),
+            [t.center.lat, t.center.lng] as [number, number],
           ];
           return (
             <Polyline
-              key={`line-${u.id}`}
-              positions={pts}
-              pathOptions={{ color: u.color, weight: 2.5, opacity: 0.85 }}
+              key={`route-${t.id}`}
+              positions={positions}
+              pathOptions={{ color, weight: 2, opacity: 0.75 }}
             />
           );
         })}
 
-      {/* Task markers */}
-      {visible.map((u: User) =>
-        u.optimizedRoute.filter(passTaskFilter).map((t) => {
-          const cfg = CATEGORY_CONFIG[t.category];
-          const isBorder = !!t.isBorder && showBorderTasks;
-          const isFlex = !t.isCore;
-          const isPri = t.isPriority;
-          const idx = t.stopIndex ?? 0;
-          const baseR = radiusByCat[t.category];
-          const r = baseR + (isPri ? 2 : 0) + (isBorder ? 1 : 0);
-          const stroke = isPri
-            ? "#3b82f6"
-            : isBorder
-              ? "#f97316"
-              : isFlex && highlightFlexible
-                ? "#a855f7"
-                : u.color;
-          const dash =
-            isPri
-              ? undefined
-              : isFlex && highlightFlexible
-                ? "3 3"
-                : isBorder
-                  ? "2 2"
-                  : undefined;
-          return (
-            <CircleMarker
-              key={`${u.id}-${t.id}`}
-              center={[t.location.lat, t.location.lng]}
-              radius={r}
-              pathOptions={{
-                color: stroke,
-                fillColor: cfg.color,
-                fillOpacity: isFlex && highlightFlexible ? 0.6 : 0.95,
-                weight: isPri ? 3 : 1.8,
-                dashArray: dash,
-              }}
-            >
-              <Tooltip direction="top" offset={[0, -4]} opacity={0.9}>
-                {u.id} · #{idx} · {t.id} · {t.category}
-                {isPri ? " · PRIORITY" : ""}
-                {isFlex ? " · flexible" : " · core"}
-              </Tooltip>
-              <Popup>
-                <div className="text-xs leading-relaxed">
-                  <div className="font-semibold">
-                    {t.id}
-                    {isPri && (
-                      <span className="ml-1 rounded bg-blue-500 px-1 text-[10px] text-white">
-                        PRIORITY
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    Category: {t.category} (×{t.workloadWeight})
-                  </div>
-                  <div>Est. hours: {t.avgCompletionHours}h</div>
-                  <div>Installer: {u.id}</div>
-                  <div>
-                    Type: {t.isCore ? "Core (territory-defining)" : "Flexible (dynamic)"}
-                  </div>
-                  <div>
-                    Phase: <strong>{t.routePhase ?? "—"}</strong> · Stop #{idx}
-                  </div>
-                  <div>Leg: {(t.travelDistance ?? 0).toFixed(2)} km</div>
-                  <div>From center: {t.centerDistance.toFixed(2)} km</div>
-                  {t.isBorder && (
-                    <div className="font-semibold text-orange-600">
-                      Border task (territory edge)
-                    </div>
-                  )}
-                  <div>
-                    {t.location.lat.toFixed(4)}, {t.location.lng.toFixed(4)}
-                  </div>
-                </div>
-              </Popup>
-            </CircleMarker>
-          );
-        }),
-      )}
-
-      {/* Territory spread circle */}
-      {showSpread &&
-        visible.map((u: User) =>
-          u.assignedTasks.length >= 2 ? (
-            <Circle
-              key={`spread-${u.id}`}
-              center={[u.centroid.lat, u.centroid.lng]}
-              radius={u.avgSpread * 1000}
-              pathOptions={{
-                color: u.color,
-                weight: 1,
-                opacity: 0.5,
-                fillOpacity: 0.04,
-                dashArray: "2 6",
-              }}
-            />
-          ) : null,
-        )}
-
-      {/* Overlap hotspots */}
-      {showOverlap &&
-        simulation.overlapHotspots.map((h, i) => {
-          if (!visibleUsers.has(h.a.userId) || !visibleUsers.has(h.b.userId))
-            return null;
-          const mid: [number, number] = [
-            (h.a.location.lat + h.b.location.lat) / 2,
-            (h.a.location.lng + h.b.location.lng) / 2,
-          ];
-          return (
-            <CircleMarker
-              key={`ov-${i}`}
-              center={mid}
-              radius={9}
-              pathOptions={{
-                color: "#ef4444",
-                weight: 2,
-                fillColor: "#ef4444",
-                fillOpacity: 0.18,
-                dashArray: "3 3",
-              }}
-            >
-              <Tooltip direction="top" offset={[0, -6]}>
-                Overlap · {h.a.userId}·{h.a.taskId} ↔ {h.b.userId}·{h.b.taskId} ·{" "}
-                {h.distanceKm.toFixed(2)} km
-              </Tooltip>
-            </CircleMarker>
-          );
-        })}
-
-      {/* Stop numbers */}
-      {showStopNumbers &&
-        visible.length <= 3 &&
-        visible.map((u: User) =>
-          u.optimizedRoute.filter(passTaskFilter).map((t) => {
-            const idx = t.stopIndex ?? 0;
-            const isPri = t.isPriority;
+      {/* Jobs */}
+      {state.territories.filter(visibleTerritory).flatMap((t) =>
+        t.jobs
+          .filter((j) => {
+            if (filters.showPriorityOnly && !j.priority) return false;
+            if (!filters.showReserve && j.isReserve) return false;
+            if (!filters.showCore && j.isCore) return false;
+            return true;
+          })
+          .map((j) => {
+            const baseColor = installerColorById.get(t.installerId) ?? "#888";
+            const isPriority = j.priority;
+            const isReserve = j.isReserve;
+            const radius = isPriority ? 7 : j.category === "D" ? 6 : 4;
             return (
-              <Marker
-                key={`num-${u.id}-${t.id}`}
-                position={[t.location.lat, t.location.lng]}
-                icon={divIcon({
-                  className: "",
-                  html: `<div style="
-                    transform:translate(8px,-18px);
-                    background:${isPri ? "#3b82f6" : u.color};color:white;
-                    font-size:10px;font-weight:700;
-                    padding:1px 5px;border-radius:8px;
-                    border:1px solid rgba(255,255,255,.5);
-                    box-shadow:0 1px 3px rgba(0,0,0,.3);
-                  ">${isPri ? "★" : ""}${idx}</div>`,
-                  iconSize: [0, 0],
-                  iconAnchor: [0, 0],
-                })}
-                interactive={false}
-              />
+              <CircleMarker
+                key={`job-${j.id}`}
+                center={[j.lat, j.lng]}
+                radius={radius}
+                pathOptions={{
+                  color: isPriority ? PRIORITY_COLORS[j.priorityLevel ?? 3] : baseColor,
+                  weight: isPriority ? 2 : 1,
+                  fillColor: isReserve ? "#fff" : CATEGORY_CONFIG[j.category].color,
+                  fillOpacity: isReserve ? 0.4 : 0.85,
+                  dashArray: isReserve ? "2 2" : undefined,
+                }}
+              >
+                <Tooltip>
+                  <div className="text-xs font-semibold">
+                    {j.id} {isPriority && "· PRIORITY"}
+                  </div>
+                  <div className="text-xs">Cat {j.category} · wl {j.weight}</div>
+                  <div className="text-xs">
+                    {isReserve ? "Reserve" : "Core"}
+                    {j.isAnchor && " · Anchor"}
+                    {j.isBorder && " · Border"}
+                  </div>
+                  <div className="text-xs">Territory: {t.id}</div>
+                  <div className="text-xs">Installer: {t.installerId}</div>
+                </Tooltip>
+              </CircleMarker>
             );
           }),
-        )}
+      )}
 
-      {/* User centroid markers */}
-      {showTerritories &&
-        visible.map((u: User) =>
-          u.assignedTasks.length > 0 ? (
+      {/* Anchor + Border ring markers */}
+      {filters.showAnchors &&
+        state.territories.filter(visibleTerritory).flatMap((t) =>
+          t.anchorJobs.map((j) => (
             <CircleMarker
-              key={`cent-${u.id}`}
-              center={[u.centroid.lat, u.centroid.lng]}
-              radius={6}
-              pathOptions={{
-                color: "white",
-                weight: 2,
-                fillColor: u.color,
-                fillOpacity: 1,
-              }}
-            >
-              <Tooltip direction="top" offset={[0, -6]}>
-                {u.id} territory · {u.assignedTasks.length} jobs · ★{u.priorityCount} ·
-                workload {u.totalWorkload.toFixed(2)}
-              </Tooltip>
-            </CircleMarker>
-          ) : null,
+              key={`anch-${j.id}`}
+              center={[j.lat, j.lng]}
+              radius={10}
+              pathOptions={{ color: "#10b981", weight: 1.5, fill: false }}
+            />
+          )),
+        )}
+      {filters.showBorders &&
+        state.territories.filter(visibleTerritory).flatMap((t) =>
+          t.borderJobs.map((j) => (
+            <CircleMarker
+              key={`bord-${j.id}`}
+              center={[j.lat, j.lng]}
+              radius={9}
+              pathOptions={{ color: "#f59e0b", weight: 1.5, fill: false, dashArray: "3 3" }}
+            />
+          )),
         )}
 
-      <Marker position={[center.lat, center.lng]} icon={centerIcon}>
-        <Popup>
-          <div className="text-xs">
-            <div className="font-semibold">Center / Origin</div>
-            <div>
-              {center.lat.toFixed(4)}, {center.lng.toFixed(4)}
-            </div>
-            <div>Radius: {radiusKm} km</div>
-          </div>
-        </Popup>
-      </Marker>
+      {/* Territory centers */}
+      {filters.showTerritories &&
+        state.territories.filter(visibleTerritory).map((t) => (
+          <CircleMarker
+            key={`tc-${t.id}`}
+            center={[t.center.lat, t.center.lng]}
+            radius={5}
+            pathOptions={{
+              color: installerColorById.get(t.installerId) ?? "#888",
+              weight: 2,
+              fillColor: "#fff",
+              fillOpacity: 1,
+            }}
+          >
+            <Tooltip permanent direction="top" offset={[0, -6]} className="!bg-transparent !border-0 !shadow-none">
+              <span className="text-[10px] font-bold text-foreground">
+                {t.id}·{t.installerId}
+              </span>
+            </Tooltip>
+          </CircleMarker>
+        ))}
+
+      {/* Region seeds */}
+      {filters.showRegions &&
+        state.regions.filter(visibleRegion).map((r) => (
+          <CircleMarker
+            key={`rs-${r.id}`}
+            center={[r.center.lat, r.center.lng]}
+            radius={8}
+            pathOptions={{ color: r.color, weight: 3, fillColor: r.color, fillOpacity: 0.4 }}
+          >
+            <Tooltip permanent direction="top" offset={[0, -8]} className="!bg-transparent !border-0 !shadow-none">
+              <span className="text-xs font-bold" style={{ color: r.color }}>
+                {r.id}
+              </span>
+            </Tooltip>
+          </CircleMarker>
+        ))}
+
+      {/* Office */}
+      {centerIcon && (
+        <Marker position={[state.center.lat, state.center.lng]} icon={centerIcon}>
+          <Popup>Base location</Popup>
+        </Marker>
+      )}
     </MapContainer>
   );
 }
