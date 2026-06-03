@@ -1,89 +1,245 @@
-// V8 — Priority-Aware Territory Optimization Engine
+// V9 Workforce Dispatch Engine — TypeScript port
+// Hierarchy: Region → Territory → Core/Reserve Jobs → Installer
 
 export type LatLng = { lat: number; lng: number };
-
 export type Category = "A" | "B" | "C" | "D";
+export type DispatchType = "PRIORITY" | "RESERVE" | "AUTO_RESERVE";
+export type PriorityLevel = 1 | 2 | 3 | 4 | 5;
+export type DispatchPath = "SAME_REGION" | "NEIGHBOR_REGION" | "GLOBAL";
+
+export const PRIORITY_LABELS: Record<PriorityLevel, string> = {
+  4: "EMERGENCY",
+  3: "HIGH",
+  1: "NORMAL",
+  2: "LOW",
+  5: "VERY_LOW",
+};
+export const PRIORITY_RANK: Record<PriorityLevel, number> = {
+  4: 1,
+  3: 2,
+  1: 3,
+  2: 4,
+  5: 5,
+};
+export const PRIORITY_COLORS: Record<PriorityLevel, string> = {
+  4: "#ef4444",
+  3: "#f97316",
+  1: "#3b82f6",
+  2: "#a3a3a3",
+  5: "#737373",
+};
 
 export const CATEGORY_CONFIG: Record<
   Category,
-  { avgHours: number; weight: number; color: string }
+  { weight: number; avgHours: number; priority: boolean; color: string }
 > = {
-  A: { avgHours: 1, weight: 0.25, color: "#22c55e" },
-  B: { avgHours: 4, weight: 1, color: "#3b82f6" },
-  C: { avgHours: 2, weight: 0.5, color: "#eab308" },
-  D: { avgHours: 8, weight: 2, color: "#ef4444" },
+  A: { weight: 0.25, avgHours: 1, priority: false, color: "#22c55e" },
+  B: { weight: 1, avgHours: 4, priority: true, color: "#3b82f6" },
+  C: { weight: 0.5, avgHours: 2, priority: false, color: "#eab308" },
+  D: { weight: 2, avgHours: 8, priority: false, color: "#ef4444" },
 };
 
-export const PRIORITY_CATEGORIES: Category[] = ["B"];
+export const SCORING = {
+  AVAILABILITY_WEIGHT: 0.5,
+  DISTANCE_WEIGHT: 0.4,
+  REGION_WEIGHT: 0.1,
+};
 
 export const CONFIG = {
-  CORE_TASK_PERCENTAGE: 0.8,
-  CLUSTER_ITERATIONS: 20,
-  OPTIMIZATION_ITERATIONS: 80,
-  BORDER_MOVE_DISTANCE_KM: 15,
-  BORDER_TASK_PERCENTAGE: 0.3,
-  OVERLAP_DISTANCE_KM: 8,
-  WORKLOAD_WEIGHT: 100,
-  DISTANCE_WEIGHT: 0.2,
-  COMPACTNESS_WEIGHT: 1.5,
-  OVERLAP_WEIGHT: 50,
-};
-
-export type Task = {
-  id: string;
-  location: LatLng;
-  category: Category;
-  isPriority: boolean;
-  isCore: boolean; // true if part of core 80%, false if flexible
-  workloadWeight: number;
-  avgCompletionHours: number;
-  centerDistance: number;
-  travelDistance?: number;
-  clusterId?: number;
-  assignedUserId?: string;
-  isBorder?: boolean;
-  routePhase?: "priority" | "normal";
-  stopIndex?: number;
-};
-
-export type CategoryBreakdown = Record<Category, number>;
-
-export type User = {
-  id: string;
-  color: string;
-  clusterId: number;
-  assignedTasks: Task[];
-  optimizedRoute: Task[];
-  priorityRoute: Task[];
-  normalRoute: Task[];
-  totalRouteDistance: number;
-  priorityDistance: number;
-  normalDistance: number;
-  returnDistance: number;
-  totalWorkload: number;
-  totalHours: number;
-  centroid: LatLng;
-  hull: LatLng[];
-  compactness: number;
-  avgSpread: number;
-  overlapCount: number;
-  priorityCount: number;
-  flexibleCount: number;
-  coreCount: number;
-  categoryBreakdown: CategoryBreakdown;
-  efficiency: number; // workload per km
-};
-
-export type OverlapHotspot = {
-  a: { userId: string; taskId: string; location: LatLng };
-  b: { userId: string; taskId: string; location: LatLng };
-  distanceKm: number;
+  RESERVE_RELEASE_BATCH_SIZE: 2,
+  RESERVE_ELIGIBILITY_THRESHOLD: 0.2,
+  AUTO_RESERVE_BATCH_LIMIT: 5,
+  CORE_PERCENT: 0.8,
+  ANCHOR_PERCENT: 0.3,
+  BORDER_PERCENT: 0.3,
+  SHIFT_CAPACITY: 8,
 };
 
 export const defaultOfficeLocation: LatLng = { lat: 28.6139, lng: 77.209 };
 export const RADIUS_KM = 50;
-const EARTH_RADIUS_KM = 6371;
+const EARTH = 6371;
 
+export type Job = {
+  id: string;
+  category: Category;
+  weight: number;
+  avgHours: number;
+  priority: boolean;
+  priorityLevel?: PriorityLevel;
+  lat: number;
+  lng: number;
+  regionId?: string;
+  territoryId?: string;
+  isCore?: boolean;
+  isAnchor?: boolean;
+  isBorder?: boolean;
+  isReserve?: boolean;
+  routeStop?: number;
+  arrivalIndex?: number;
+  external?: boolean; // priority jobs added live
+};
+
+export type Installer = {
+  id: string;
+  color: string;
+  assignedWorkload: number;
+  completedWorkload: number;
+  remainingWorkload: number;
+  shiftCapacity: number;
+  availableCapacity: number;
+  availabilityScore: number;
+  utilization: number;
+  regionId: string | null;
+  territoryId: string | null;
+  eligible: boolean;
+  capacityStatus: "HEALTHY" | "WARNING" | "FULL";
+};
+
+export type Territory = {
+  id: string;
+  regionId: string;
+  installerId: string;
+  ownerInstallerId: string;
+  jobs: Job[];
+  coreJobs: Job[];
+  reserveJobs: Job[];
+  anchorJobs: Job[];
+  borderJobs: Job[];
+  optimizedRoute: Job[];
+  routeDistance: number;
+  seed: LatLng;
+  center: LatLng;
+  workload: number;
+  coreWorkload: number;
+  reserveWorkload: number;
+  spread: number;
+  efficiency: number; // workload / routeDistance
+};
+
+export type Region = {
+  id: string;
+  color: string;
+  jobs: Job[];
+  territories: Territory[];
+  installerCount: number;
+  seed: LatLng;
+  center: LatLng;
+  workload: number;
+  neighbors: string[];
+};
+
+export type PriorityAssignment = {
+  id: string;
+  jobId: string;
+  regionId: string;
+  assignedTo: string;
+  dispatchType: DispatchType;
+  dispatchPath: DispatchPath;
+  priorityLevel: PriorityLevel;
+  workload: number;
+  score: number;
+  createdAt: number;
+};
+
+export type ReserveAssignment = {
+  id: string;
+  territoryId: string;
+  territoryOwner: string;
+  assignedTo: string;
+  dispatchType: DispatchType;
+  temporaryAssignment: boolean;
+  reason: string;
+  score: number;
+  jobIds: string[];
+  workload: number;
+  createdAt: number;
+};
+
+export type EngineEvent =
+  | {
+      kind: "JOB_ARRIVAL";
+      t: number;
+      jobId: string;
+      priorityLevel: PriorityLevel;
+      regionId: string;
+      workload: number;
+    }
+  | {
+      kind: "PRIORITY_DISPATCH";
+      t: number;
+      jobId: string;
+      installerId: string;
+      dispatchPath: DispatchPath;
+      score: number;
+      regionId: string;
+    }
+  | {
+      kind: "RESERVE_RELEASE";
+      t: number;
+      installerId: string;
+      territoryId: string;
+      jobIds: string[];
+    }
+  | {
+      kind: "AUTO_RESERVE";
+      t: number;
+      installerId: string;
+      jobId: string;
+      score: number;
+    }
+  | {
+      kind: "COMPLETION";
+      t: number;
+      installerId: string;
+      completedWorkload: number;
+      remainingWorkload: number;
+    }
+  | {
+      kind: "CAPACITY_BLOCK";
+      t: number;
+      installerId: string;
+      required: number;
+      available: number;
+      jobId?: string;
+    }
+  | {
+      kind: "RESERVE_DISPATCH";
+      t: number;
+      territoryId: string;
+      installerId: string;
+      score: number;
+      jobIds: string[];
+    };
+
+export type SimulationState = {
+  jobs: Job[];
+  installers: Installer[];
+  regions: Region[];
+  territories: Territory[];
+  priorityQueue: Job[];
+  priorityAssignments: PriorityAssignment[];
+  reserveAssignments: ReserveAssignment[];
+  events: EngineEvent[];
+  dispatchMetrics: Record<DispatchType, number>;
+  capacityBlocks: number;
+  center: LatLng;
+  radiusKm: number;
+  regionCount: number;
+  totalJobs: number;
+  totalInstallers: number;
+  tCounter: number;
+};
+
+export type SimulationConfig = {
+  totalJobs?: number;
+  totalInstallers?: number;
+  regionCount?: number;
+  seed?: number;
+  center?: LatLng;
+  radiusKm?: number;
+};
+
+// ====== utils ======
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -94,25 +250,7 @@ function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-function generatePointInRadius(
-  cLat: number,
-  cLng: number,
-  radiusKm: number,
-  rand: () => number,
-): LatLng {
-  const angle = rand() * 2 * Math.PI;
-  const r = radiusKm * Math.sqrt(rand());
-  const dLat = (r / EARTH_RADIUS_KM) * (180 / Math.PI);
-  const dLng = dLat / Math.cos((cLat * Math.PI) / 180);
-  return {
-    lat: +(cLat + dLat * Math.cos(angle)).toFixed(6),
-    lng: +(cLng + dLng * Math.sin(angle)).toFixed(6),
-  };
-}
-
 const toRad = (v: number) => (v * Math.PI) / 180;
-
 export function haversine(a: LatLng, b: LatLng) {
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
@@ -121,10 +259,9 @@ export function haversine(a: LatLng, b: LatLng) {
   const x =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return EARTH * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
-
-function convexHull(points: LatLng[]): LatLng[] {
+export function convexHull(points: LatLng[]): LatLng[] {
   if (points.length < 3) return [...points];
   const pts = [...points].sort((a, b) =>
     a.lng === b.lng ? a.lat - b.lat : a.lng - b.lng,
@@ -133,20 +270,14 @@ function convexHull(points: LatLng[]): LatLng[] {
     (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
   const lower: LatLng[] = [];
   for (const p of pts) {
-    while (
-      lower.length >= 2 &&
-      cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
-    )
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
       lower.pop();
     lower.push(p);
   }
   const upper: LatLng[] = [];
   for (let i = pts.length - 1; i >= 0; i--) {
     const p = pts[i];
-    while (
-      upper.length >= 2 &&
-      cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
-    )
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
       upper.pop();
     upper.push(p);
   }
@@ -154,443 +285,759 @@ function convexHull(points: LatLng[]): LatLng[] {
   lower.pop();
   return lower.concat(upper);
 }
+function centroid(jobs: { lat: number; lng: number }[], fallback: LatLng): LatLng {
+  if (!jobs.length) return fallback;
+  return {
+    lat: jobs.reduce((s, j) => s + j.lat, 0) / jobs.length,
+    lng: jobs.reduce((s, j) => s + j.lng, 0) / jobs.length,
+  };
+}
+function makeColors(n: number, sat = 70, light = 50) {
+  return Array.from({ length: n }, (_, i) => {
+    const hue = Math.round((360 / Math.max(1, n)) * i);
+    return `hsl(${hue} ${sat}% ${light}%)`;
+  });
+}
 
-function nearestNeighborRoute(tasks: Task[], start: LatLng) {
-  const remaining = [...tasks];
-  const route: Task[] = [];
-  let cur = start;
+function randomCategory(r: () => number): Category {
+  const v = r();
+  if (v < 0.4) return "A";
+  if (v < 0.7) return "B";
+  if (v < 0.9) return "C";
+  return "D";
+}
+
+function generateJobs(total: number, center: LatLng, radiusKm: number, rand: () => number): Job[] {
+  const out: Job[] = [];
+  for (let i = 1; i <= total; i++) {
+    const cat = randomCategory(rand);
+    const cfg = CATEGORY_CONFIG[cat];
+    // uniform in radius
+    const angle = rand() * 2 * Math.PI;
+    const r = radiusKm * Math.sqrt(rand());
+    const dLat = (r / EARTH) * (180 / Math.PI);
+    const dLng = dLat / Math.cos((center.lat * Math.PI) / 180);
+    out.push({
+      id: `T${i}`,
+      category: cat,
+      weight: cfg.weight,
+      avgHours: cfg.avgHours,
+      priority: cfg.priority,
+      priorityLevel: cfg.priority ? 3 : undefined,
+      lat: +(center.lat + dLat * Math.cos(angle)).toFixed(6),
+      lng: +(center.lng + dLng * Math.sin(angle)).toFixed(6),
+    });
+  }
+  return out;
+}
+
+function generateInstallers(count: number): Installer[] {
+  const colors = makeColors(count, 78, 45);
+  return Array.from({ length: count }, (_, i) => ({
+    id: `U${i + 1}`,
+    color: colors[i],
+    assignedWorkload: 0,
+    completedWorkload: 0,
+    remainingWorkload: 0,
+    shiftCapacity: CONFIG.SHIFT_CAPACITY,
+    availableCapacity: CONFIG.SHIFT_CAPACITY,
+    availabilityScore: 0,
+    utilization: 0,
+    regionId: null,
+    territoryId: null,
+    eligible: false,
+    capacityStatus: "HEALTHY",
+  }));
+}
+
+function farthestPointSeeds<T extends LatLng>(items: T[], k: number): T[] {
+  const seeds: T[] = [];
+  if (!items.length) return seeds;
+  seeds.push(items[0]);
+  while (seeds.length < k) {
+    let best: T | null = null;
+    let bestD = -1;
+    for (const it of items) {
+      let nearest = Infinity;
+      for (const s of seeds) nearest = Math.min(nearest, haversine(it, s));
+      if (nearest > bestD) {
+        bestD = nearest;
+        best = it;
+      }
+    }
+    if (best) seeds.push(best);
+    else break;
+  }
+  return seeds;
+}
+
+function allocateInstallersToRegions(
+  regions: Region[],
+  totalInstallers: number,
+  totalJobs: number,
+) {
+  let assigned = 0;
+  regions.forEach((r) => {
+    r.installerCount = Math.max(
+      1,
+      Math.round((r.jobs.length / Math.max(1, totalJobs)) * totalInstallers),
+    );
+    assigned += r.installerCount;
+  });
+  while (assigned > totalInstallers) {
+    const largest = [...regions].sort((a, b) => b.installerCount - a.installerCount)[0];
+    if (largest.installerCount > 1) {
+      largest.installerCount--;
+      assigned--;
+    } else break;
+  }
+  while (assigned < totalInstallers) {
+    const largest = [...regions].sort((a, b) => b.jobs.length - a.jobs.length)[0];
+    largest.installerCount++;
+    assigned++;
+  }
+}
+
+function createTerritories(region: Region): Territory[] {
+  if (!region.jobs.length || !region.installerCount) return [];
+  const seeds = farthestPointSeeds(region.jobs, region.installerCount);
+  const territories: Territory[] = [];
+  for (let i = 0; i < region.installerCount; i++) {
+    const s = seeds[i] ?? region.jobs[0];
+    territories.push({
+      id: `${region.id}-T${i + 1}`,
+      regionId: region.id,
+      installerId: "UNASSIGNED",
+      ownerInstallerId: "UNASSIGNED",
+      jobs: [],
+      coreJobs: [],
+      reserveJobs: [],
+      anchorJobs: [],
+      borderJobs: [],
+      optimizedRoute: [],
+      routeDistance: 0,
+      seed: { lat: s.lat, lng: s.lng },
+      center: { lat: s.lat, lng: s.lng },
+      workload: 0,
+      coreWorkload: 0,
+      reserveWorkload: 0,
+      spread: 0,
+      efficiency: 0,
+    });
+  }
+  const regionWorkload = region.jobs.reduce((s, j) => s + j.weight, 0);
+  const target = regionWorkload / region.installerCount;
+  const sortedJobs = [...region.jobs].sort((a, b) => b.weight - a.weight);
+  for (const job of sortedJobs) {
+    let best: Territory | null = null;
+    let bestScore = Infinity;
+    for (const t of territories) {
+      const dist = haversine(job, t.seed);
+      const cur = t.jobs.reduce((s, j) => s + j.weight, 0);
+      const penalty = cur > target ? cur - target : 0;
+      const score = dist + penalty * 15;
+      if (score < bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+    if (best) {
+      best.jobs.push(job);
+      job.territoryId = best.id;
+    }
+  }
+  return territories;
+}
+
+function identifyAnchorBorder(t: Territory) {
+  if (!t.jobs.length) {
+    t.anchorJobs = [];
+    t.borderJobs = [];
+    return;
+  }
+  const c = centroid(t.jobs, t.seed);
+  t.center = c;
+  const withDist = t.jobs.map((j) => ({ j, d: haversine(c, j) }));
+  withDist.sort((a, b) => a.d - b.d);
+  const anchorN = Math.max(1, Math.ceil(t.jobs.length * CONFIG.ANCHOR_PERCENT));
+  const anchorIds = new Set(withDist.slice(0, anchorN).map((x) => x.j.id));
+  t.jobs.forEach((j) => {
+    if (j.priority) anchorIds.add(j.id);
+  });
+  t.anchorJobs = t.jobs.filter((j) => anchorIds.has(j.id));
+  t.jobs.forEach((j) => (j.isAnchor = anchorIds.has(j.id)));
+  withDist.sort((a, b) => b.d - a.d);
+  const borderN = Math.max(1, Math.ceil(t.jobs.length * CONFIG.BORDER_PERCENT));
+  const borderIds = new Set(withDist.slice(0, borderN).map((x) => x.j.id));
+  t.borderJobs = t.jobs.filter((j) => borderIds.has(j.id));
+  t.jobs.forEach((j) => (j.isBorder = borderIds.has(j.id)));
+  t.spread = withDist.length ? withDist[0].d : 0;
+}
+
+function createCoreReserve(t: Territory) {
+  const total = t.jobs.length;
+  const targetCore = Math.ceil(total * CONFIG.CORE_PERCENT);
+  const coreMap = new Map<string, Job>();
+  t.jobs.filter((j) => j.priority).forEach((j) => coreMap.set(j.id, j));
+  const nonP = t.jobs.filter((j) => !j.priority).sort((a, b) => b.weight - a.weight);
+  for (const j of nonP) {
+    if (coreMap.size >= targetCore) break;
+    coreMap.set(j.id, j);
+  }
+  t.coreJobs = [...coreMap.values()];
+  t.reserveJobs = t.jobs.filter((j) => !coreMap.has(j.id));
+  t.coreJobs.forEach((j) => {
+    j.isCore = true;
+    j.isReserve = false;
+  });
+  t.reserveJobs.forEach((j) => {
+    j.isCore = false;
+    j.isReserve = true;
+  });
+}
+
+function nearestNeighborRoute(jobs: Job[]): { route: Job[]; distance: number } {
+  if (jobs.length <= 1) return { route: [...jobs], distance: 0 };
+  const remaining = [...jobs];
+  const route: Job[] = [remaining.shift()!];
   let total = 0;
   while (remaining.length) {
+    const cur = route[route.length - 1];
     let bi = 0;
     let bd = Infinity;
     for (let i = 0; i < remaining.length; i++) {
-      const d = haversine(cur, remaining[i].location);
+      const d = haversine(cur, remaining[i]);
       if (d < bd) {
         bd = d;
         bi = i;
       }
     }
-    const next = { ...remaining[bi], travelDistance: bd };
-    route.push(next);
     total += bd;
-    cur = next.location;
-    remaining.splice(bi, 1);
+    route.push(remaining.splice(bi, 1)[0]);
   }
-  return { route, totalDistance: total, end: cur };
+  route.forEach((j, i) => (j.routeStop = i + 1));
+  return { route, distance: total };
 }
 
-// V8 phased route: center → priority → normal → center
-function buildPhasedRoute(tasks: Task[], center: LatLng) {
-  const priority = tasks.filter((t) => t.isPriority);
-  const normal = tasks.filter((t) => !t.isPriority);
-  const p = nearestNeighborRoute(priority, center);
-  p.route.forEach((t) => (t.routePhase = "priority"));
-  const n = nearestNeighborRoute(normal, p.end);
-  n.route.forEach((t) => (t.routePhase = "normal"));
-  const lastPoint = n.route.length
-    ? n.route[n.route.length - 1].location
-    : p.end;
-  const returnDistance = haversine(lastPoint, center);
-  const route = [...p.route, ...n.route];
-  route.forEach((t, i) => (t.stopIndex = i + 1));
-  return {
-    route,
-    priorityRoute: p.route,
-    normalRoute: n.route,
-    priorityDistance: p.totalDistance,
-    normalDistance: n.totalDistance,
-    returnDistance,
-    totalDistance: p.totalDistance + n.totalDistance + returnDistance,
-  };
+function recomputeTerritory(t: Territory) {
+  t.workload = t.jobs.reduce((s, j) => s + j.weight, 0);
+  t.coreWorkload = t.coreJobs.reduce((s, j) => s + j.weight, 0);
+  t.reserveWorkload = t.reserveJobs.reduce((s, j) => s + j.weight, 0);
+  const r = nearestNeighborRoute(t.coreJobs);
+  t.optimizedRoute = r.route;
+  t.routeDistance = r.distance;
+  t.efficiency = r.distance > 0 ? t.coreWorkload / r.distance : t.coreWorkload;
 }
 
-function territoryCenter(tasks: Task[], fallback: LatLng): LatLng {
-  if (!tasks.length) return fallback;
-  const lat = tasks.reduce((s, t) => s + t.location.lat, 0) / tasks.length;
-  const lng = tasks.reduce((s, t) => s + t.location.lng, 0) / tasks.length;
-  return { lat, lng };
+function recomputeInstaller(i: Installer) {
+  i.remainingWorkload = Math.max(0, i.assignedWorkload - i.completedWorkload);
+  i.availabilityScore = 1 / (i.remainingWorkload + 1);
+  i.availableCapacity = Math.max(0, i.shiftCapacity - i.assignedWorkload);
+  i.utilization = i.shiftCapacity > 0 ? Math.min(1, i.assignedWorkload / i.shiftCapacity) : 0;
+  i.eligible =
+    i.assignedWorkload > 0 &&
+    (i.remainingWorkload === 0 ||
+      i.remainingWorkload / i.assignedWorkload <= CONFIG.RESERVE_ELIGIBILITY_THRESHOLD);
+  i.capacityStatus =
+    i.utilization >= 0.99 ? "FULL" : i.utilization >= 0.8 ? "WARNING" : "HEALTHY";
 }
 
-function calculateUserMetrics(user: User, center: LatLng) {
-  const r = buildPhasedRoute(user.assignedTasks, center);
-  user.optimizedRoute = r.route;
-  user.priorityRoute = r.priorityRoute;
-  user.normalRoute = r.normalRoute;
-  user.totalRouteDistance = r.totalDistance;
-  user.priorityDistance = r.priorityDistance;
-  user.normalDistance = r.normalDistance;
-  user.returnDistance = r.returnDistance;
-  user.totalWorkload = user.assignedTasks.reduce(
-    (s, t) => s + t.workloadWeight,
-    0,
-  );
-  user.totalHours = user.assignedTasks.reduce(
-    (s, t) => s + t.avgCompletionHours,
-    0,
-  );
-  const c = territoryCenter(user.assignedTasks, center);
-  user.centroid = user.assignedTasks.length ? c : center;
-  const dists = user.assignedTasks.map((t) => haversine(t.location, c));
-  user.compactness = dists.reduce((s, d) => s + d, 0);
-  user.avgSpread = dists.length ? user.compactness / dists.length : 0;
-  user.hull = user.assignedTasks.length
-    ? convexHull(user.assignedTasks.map((t) => t.location))
-    : [];
-  const cb: CategoryBreakdown = { A: 0, B: 0, C: 0, D: 0 };
-  user.assignedTasks.forEach((t) => cb[t.category]++);
-  user.categoryBreakdown = cb;
-  user.priorityCount = user.assignedTasks.filter((t) => t.isPriority).length;
-  user.coreCount = user.assignedTasks.filter((t) => t.isCore).length;
-  user.flexibleCount = user.assignedTasks.length - user.coreCount;
-  user.efficiency =
-    user.totalRouteDistance > 0
-      ? user.totalWorkload / user.totalRouteDistance
-      : 0;
-}
-
-// k-means on core tasks with workload awareness
-function createCoreTerritories(coreTasks: Task[], k: number) {
-  let centroids: LatLng[] = coreTasks.slice(0, k).map((t) => ({ ...t.location }));
-  // pad centroids if not enough core tasks
-  while (centroids.length < k) {
-    centroids.push(
-      coreTasks[centroids.length % Math.max(1, coreTasks.length)]?.location ?? {
-        lat: 0,
-        lng: 0,
-      },
-    );
-  }
-  let clusters: Task[][] = [];
-  for (let it = 0; it < CONFIG.CLUSTER_ITERATIONS; it++) {
-    clusters = Array.from({ length: k }, () => []);
-    for (const t of coreTasks) {
-      let bi = 0;
-      let bs = Infinity;
-      for (let i = 0; i < k; i++) {
-        const geo = haversine(t.location, centroids[i]);
-        const cw = clusters[i].reduce((s, x) => s + x.workloadWeight, 0);
-        const score = geo + cw * 1.5;
-        if (score < bs) {
-          bs = score;
-          bi = i;
-        }
-      }
-      clusters[bi].push(t);
-    }
-    centroids = clusters.map((c, i) => {
-      if (!c.length) return centroids[i];
-      const lat = c.reduce((s, t) => s + t.location.lat, 0) / c.length;
-      const lng = c.reduce((s, t) => s + t.location.lng, 0) / c.length;
-      return { lat, lng };
+function rebalanceRegion(region: Region) {
+  if (region.territories.length < 2) return;
+  let improved = true;
+  let guard = 0;
+  while (improved && guard++ < 200) {
+    improved = false;
+    const stats = region.territories
+      .map((t) => ({ t, w: t.jobs.reduce((s, j) => s + j.weight, 0) }))
+      .sort((a, b) => a.w - b.w);
+    const under = stats[0];
+    const over = stats[stats.length - 1];
+    const gap = Math.abs(over.w - under.w);
+    let best: { job: Job; gap: number } | null = null;
+    over.t.borderJobs.forEach((job) => {
+      const after = Math.abs(over.w - job.weight - (under.w + job.weight));
+      if (after < gap && (!best || after < best.gap)) best = { job, gap: after };
     });
+    if (best !== null) {
+      const move = best as { job: Job; gap: number };
+      over.t.jobs = over.t.jobs.filter((j) => j.id !== move.job.id);
+      under.t.jobs.push(move.job);
+      move.job.territoryId = under.t.id;
+      identifyAnchorBorder(over.t);
+      identifyAnchorBorder(under.t);
+      createCoreReserve(over.t);
+      createCoreReserve(under.t);
+      improved = true;
+    }
   }
-  clusters.forEach((c, i) => c.forEach((t) => (t.clusterId = i)));
-  return { clusters, centroids };
 }
 
-// Assign flexible tasks to existing territories (workload-aware)
-function assignFlexibleTasks(
-  flexible: Task[],
-  clusters: Task[][],
-  centroids: LatLng[],
+// neighbors: simple — k nearest regions by seed
+function computeNeighbors(regions: Region[]) {
+  regions.forEach((r) => {
+    const others = regions
+      .filter((o) => o.id !== r.id)
+      .map((o) => ({ id: o.id, d: haversine(r.seed, o.seed) }))
+      .sort((a, b) => a.d - b.d);
+    r.neighbors = others.slice(0, Math.min(2, others.length)).map((o) => o.id);
+  });
+}
+
+function dispatchScore(
+  installer: Installer,
+  territory: Territory,
+  territoryMap: Map<string, Territory>,
 ) {
-  for (const t of flexible) {
-    let bi = 0;
-    let bs = Infinity;
-    for (let i = 0; i < centroids.length; i++) {
-      const geo = haversine(t.location, centroids[i]);
-      const cw = clusters[i].reduce((s, x) => s + x.workloadWeight, 0);
-      const score = geo + cw * 0.8;
-      if (score < bs) {
-        bs = score;
-        bi = i;
-      }
-    }
-    t.clusterId = bi;
-    clusters[bi].push(t);
-  }
-}
-
-function calculateOverlapPenalty(users: User[]) {
-  let penalty = 0;
-  for (let i = 0; i < users.length; i++) {
-    for (let j = i + 1; j < users.length; j++) {
-      for (const a of users[i].assignedTasks) {
-        for (const b of users[j].assignedTasks) {
-          if (haversine(a.location, b.location) < CONFIG.OVERLAP_DISTANCE_KM) {
-            penalty += CONFIG.OVERLAP_WEIGHT;
-          }
-        }
-      }
-    }
-  }
-  return penalty;
-}
-
-function userScore(u: User) {
+  let distance = Infinity;
+  const own = installer.territoryId ? territoryMap.get(installer.territoryId) : undefined;
+  if (own) distance = haversine(own.center, territory.center);
+  const regionBonus = installer.regionId === territory.regionId ? 1 : 0;
   return (
-    u.totalWorkload * CONFIG.WORKLOAD_WEIGHT +
-    u.totalRouteDistance * CONFIG.DISTANCE_WEIGHT +
-    u.compactness * CONFIG.COMPACTNESS_WEIGHT
+    installer.availabilityScore * SCORING.AVAILABILITY_WEIGHT +
+    (1 / (distance + 1)) * SCORING.DISTANCE_WEIGHT +
+    regionBonus * SCORING.REGION_WEIGHT
   );
 }
 
-function globalScore(users: User[]) {
-  const overlap = calculateOverlapPenalty(users);
-  const s = users.map(userScore);
-  return Math.max(...s) - Math.min(...s) + overlap;
-}
-
-function getBorderTasks(user: User): Task[] {
-  if (!user.assignedTasks.length) return [];
-  const c = user.centroid;
-  // prefer moving flexible/non-priority tasks; priorities are sticky
-  return [...user.assignedTasks]
-    .map((t) => ({
-      t,
-      d: haversine(t.location, c) * (t.isPriority ? 0.4 : 1) * (t.isCore ? 0.7 : 1.3),
-    }))
-    .sort((a, b) => b.d - a.d)
-    .slice(0, Math.max(3, Math.ceil(user.assignedTasks.length * CONFIG.BORDER_TASK_PERCENTAGE)))
-    .map((x) => x.t);
-}
-
-
-function optimizeTerritories(users: User[], center: LatLng) {
-  for (let it = 0; it < CONFIG.OPTIMIZATION_ITERATIONS; it++) {
-    const cur = globalScore(users);
-    users.sort((a, b) => userScore(b) - userScore(a));
-    const heavy = users[0];
-    const border = getBorderTasks(heavy);
-    let improved = false;
-    for (const task of border) {
-      for (const target of users) {
-        if (target.id === heavy.id) continue;
-        const nearby = target.assignedTasks.some(
-          (tt) =>
-            haversine(task.location, tt.location) <
-            CONFIG.BORDER_MOVE_DISTANCE_KM,
-        );
-        if (!nearby) continue;
-        heavy.assignedTasks = heavy.assignedTasks.filter((t) => t.id !== task.id);
-        target.assignedTasks.push(task);
-        calculateUserMetrics(heavy, center);
-        calculateUserMetrics(target, center);
-        const nd = globalScore(users);
-        if (nd < cur) {
-          task.assignedUserId = target.id;
-          task.clusterId = target.clusterId;
-          improved = true;
-          break;
-        }
-        target.assignedTasks = target.assignedTasks.filter((t) => t.id !== task.id);
-        heavy.assignedTasks.push(task);
-        calculateUserMetrics(heavy, center);
-        calculateUserMetrics(target, center);
-      }
-      if (improved) break;
-    }
-    if (!improved) break;
-  }
-}
-
-function computeOverlapHotspots(users: User[]): OverlapHotspot[] {
-  const out: OverlapHotspot[] = [];
-  for (let i = 0; i < users.length; i++) {
-    for (let j = i + 1; j < users.length; j++) {
-      for (const a of users[i].assignedTasks) {
-        for (const b of users[j].assignedTasks) {
-          const d = haversine(a.location, b.location);
-          if (d < CONFIG.OVERLAP_DISTANCE_KM) {
-            out.push({
-              a: { userId: users[i].id, taskId: a.id, location: a.location },
-              b: { userId: users[j].id, taskId: b.id, location: b.location },
-              distanceKm: d,
-            });
-          }
-        }
-      }
-    }
-  }
-  return out;
-}
-
-function tagBorderAndOverlap(users: User[]) {
-  users.forEach((u) => {
-    u.assignedTasks.forEach((t) => (t.isBorder = false));
-    getBorderTasks(u).forEach((t) => {
-      const ref = u.assignedTasks.find((x) => x.id === t.id);
-      if (ref) ref.isBorder = true;
-      const ro = u.optimizedRoute.find((x) => x.id === t.id);
-      if (ro) ro.isBorder = true;
-    });
-  });
-  users.forEach((u) => (u.overlapCount = 0));
-  for (let i = 0; i < users.length; i++) {
-    for (let j = i + 1; j < users.length; j++) {
-      let pairs = 0;
-      for (const a of users[i].assignedTasks) {
-        for (const b of users[j].assignedTasks) {
-          if (haversine(a.location, b.location) < CONFIG.OVERLAP_DISTANCE_KM) {
-            pairs++;
-          }
-        }
-      }
-      users[i].overlapCount += pairs;
-      users[j].overlapCount += pairs;
-    }
-  }
-}
-
-function makeColors(n: number) {
-  return Array.from({ length: n }, (_, i) => {
-    const hue = Math.round((360 / n) * i);
-    return `hsl(${hue} 78% 45%)`;
-  });
-}
-
-export type Simulation = {
-  users: User[];
-  tasks: Task[];
-  coreTasks: Task[];
-  flexibleTasks: Task[];
-  priorityTasks: Task[];
-  overlapPenalty: number;
-  overlapHotspots: OverlapHotspot[];
-  totalDistance: number;
-  totalWorkload: number;
-  totalHours: number;
-  avgCompactness: number;
-  totalPriority: number;
-  totalFlexible: number;
-  workloadStdDev: number;
-  workloadDelta: number;
-  center: LatLng;
-  radiusKm: number;
-};
-
-export type SimulationConfig = {
-  totalUsers?: number;
-  totalTasks?: number;
-  seed?: number;
-  center?: LatLng;
-  radiusKm?: number;
-};
-
-export function runSimulation(config: SimulationConfig = {}): Simulation {
+// ====== build initial simulation ======
+export function runV9Simulation(cfg: SimulationConfig = {}): SimulationState {
   const {
-    totalUsers = 20,
-    totalTasks = 300,
+    totalJobs = 200,
+    totalInstallers = 12,
     seed = 42,
     center = defaultOfficeLocation,
     radiusKm = RADIUS_KM,
-  } = config;
+  } = cfg;
+  const regionCount =
+    cfg.regionCount ?? Math.max(1, Math.round(Math.sqrt(totalInstallers)));
   const rand = mulberry32(seed);
-  const colors = makeColors(totalUsers);
-  const cats: Category[] = ["A", "B", "C", "D"];
 
-  const tasks: Task[] = Array.from({ length: totalTasks }, (_, i) => {
-    const loc = generatePointInRadius(center.lat, center.lng, radiusKm, rand);
-    const cat = cats[Math.floor(rand() * 4)];
-    const cfg = CATEGORY_CONFIG[cat];
-    return {
-      id: `T${i + 1}`,
-      location: loc,
-      category: cat,
-      isPriority: PRIORITY_CATEGORIES.includes(cat),
-      isCore: false,
-      workloadWeight: cfg.weight,
-      avgCompletionHours: cfg.avgHours,
-      centerDistance: haversine(center, loc),
-    };
-  });
+  const jobs = generateJobs(totalJobs, center, radiusKm, rand);
+  const installers = generateInstallers(totalInstallers);
 
-  // V8: priority tasks ALWAYS in core 80%
-  const coreTargetCount = Math.floor(totalTasks * CONFIG.CORE_TASK_PERCENTAGE);
-  const priority = tasks.filter((t) => t.isPriority);
-  const normal = tasks.filter((t) => !t.isPriority);
-  // sort normals by distance from center (closer = more stable territory definers)
-  normal.sort((a, b) => a.centerDistance - b.centerDistance);
-  const coreNormalsCount = Math.max(0, coreTargetCount - priority.length);
-  const coreNormals = normal.slice(0, coreNormalsCount);
-  const flexible = normal.slice(coreNormalsCount);
-  const core = [...priority, ...coreNormals];
-  core.forEach((t) => (t.isCore = true));
-  flexible.forEach((t) => (t.isCore = false));
-
-  const { clusters, centroids } = createCoreTerritories(core, totalUsers);
-  assignFlexibleTasks(flexible, clusters, centroids);
-
-  const users: User[] = Array.from({ length: totalUsers }, (_, i) => ({
-    id: `U${i + 1}`,
-    color: colors[i],
-    clusterId: i,
-    assignedTasks: clusters[i] ? [...clusters[i]] : [],
-    optimizedRoute: [],
-    priorityRoute: [],
-    normalRoute: [],
-    totalRouteDistance: 0,
-    priorityDistance: 0,
-    normalDistance: 0,
-    returnDistance: 0,
-    totalWorkload: 0,
-    totalHours: 0,
-    centroid: center,
-    hull: [],
-    compactness: 0,
-    avgSpread: 0,
-    overlapCount: 0,
-    priorityCount: 0,
-    flexibleCount: 0,
-    coreCount: 0,
-    categoryBreakdown: { A: 0, B: 0, C: 0, D: 0 },
-    efficiency: 0,
+  const regionColors = makeColors(regionCount, 60, 55);
+  const regions: Region[] = Array.from({ length: regionCount }, (_, i) => ({
+    id: `R${i + 1}`,
+    color: regionColors[i],
+    jobs: [],
+    territories: [],
+    installerCount: 0,
+    seed: { lat: 0, lng: 0 },
+    center: { lat: 0, lng: 0 },
+    workload: 0,
+    neighbors: [],
   }));
-  users.forEach((u) => {
-    u.assignedTasks.forEach((t) => (t.assignedUserId = u.id));
-    calculateUserMetrics(u, center);
+
+  const regionSeeds = farthestPointSeeds(jobs, regionCount);
+  regionSeeds.forEach((s, i) => {
+    regions[i].seed = { lat: s.lat, lng: s.lng };
   });
 
-  optimizeTerritories(users, center);
+  for (const job of jobs) {
+    let bi = 0;
+    let bd = Infinity;
+    regionSeeds.forEach((s, i) => {
+      const d = haversine(job, s);
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
+    });
+    regions[bi].jobs.push(job);
+    job.regionId = regions[bi].id;
+  }
 
-  users.forEach((u) => {
-    u.assignedTasks.forEach((t) => (t.assignedUserId = u.id));
-    calculateUserMetrics(u, center);
+  allocateInstallersToRegions(regions, totalInstallers, totalJobs);
+
+  regions.forEach((r) => {
+    r.territories = createTerritories(r);
+    r.center = centroid(r.jobs, r.seed);
+    r.workload = r.jobs.reduce((s, j) => s + j.weight, 0);
   });
 
-  tagBorderAndOverlap(users);
+  // assign installers (one per territory)
+  let idx = 0;
+  regions.forEach((r) => {
+    r.territories.forEach((t) => {
+      const ins = installers[idx];
+      if (ins) {
+        t.installerId = ins.id;
+        t.ownerInstallerId = ins.id;
+        ins.regionId = r.id;
+        ins.territoryId = t.id;
+      }
+      idx++;
+    });
+  });
 
-  const overlapPenalty = calculateOverlapPenalty(users);
-  const overlapHotspots = computeOverlapHotspots(users);
-  const totalDistance = users.reduce((s, u) => s + u.totalRouteDistance, 0);
-  const totalWorkload = users.reduce((s, u) => s + u.totalWorkload, 0);
-  const totalHours = users.reduce((s, u) => s + u.totalHours, 0);
-  const avgCompactness =
-    users.reduce((s, u) => s + u.avgSpread, 0) / Math.max(1, users.length);
-  const wls = users.map((u) => u.totalWorkload);
-  const mean = wls.reduce((s, w) => s + w, 0) / Math.max(1, wls.length);
-  const variance =
-    wls.reduce((s, w) => s + (w - mean) ** 2, 0) / Math.max(1, wls.length);
-  const workloadStdDev = Math.sqrt(variance);
-  const workloadDelta = Math.max(...wls) - Math.min(...wls);
+  // process territories (anchors, borders, core/reserve)
+  regions.forEach((r) =>
+    r.territories.forEach((t) => {
+      identifyAnchorBorder(t);
+      createCoreReserve(t);
+    }),
+  );
 
-  return {
-    users,
-    tasks,
-    coreTasks: core,
-    flexibleTasks: flexible,
-    priorityTasks: priority,
-    overlapPenalty,
-    overlapHotspots,
-    totalDistance,
-    totalWorkload,
-    totalHours,
-    avgCompactness,
-    totalPriority: priority.length,
-    totalFlexible: flexible.length,
-    workloadStdDev,
-    workloadDelta,
+  rebalanceRegions(regions);
+
+  regions.forEach((r) => r.territories.forEach((t) => recomputeTerritory(t)));
+
+  // installer states
+  const installerMap = new Map(installers.map((i) => [i.id, i]));
+  regions.forEach((r) =>
+    r.territories.forEach((t) => {
+      const ins = installerMap.get(t.installerId);
+      if (!ins) return;
+      ins.assignedWorkload = t.coreWorkload;
+      ins.completedWorkload = 0;
+      recomputeInstaller(ins);
+    }),
+  );
+
+  computeNeighbors(regions);
+
+  const territories = regions.flatMap((r) => r.territories);
+
+  const state: SimulationState = {
+    jobs,
+    installers,
+    regions,
+    territories,
+    priorityQueue: [],
+    priorityAssignments: [],
+    reserveAssignments: [],
+    events: [],
+    dispatchMetrics: { PRIORITY: 0, RESERVE: 0, AUTO_RESERVE: 0 },
+    capacityBlocks: 0,
     center,
     radiusKm,
+    regionCount,
+    totalJobs,
+    totalInstallers,
+    tCounter: 0,
+  };
+  return state;
+}
+
+function rebalanceRegions(regions: Region[]) {
+  regions.forEach(rebalanceRegion);
+}
+
+// ====== dynamic actions (return NEW state) ======
+function clone(state: SimulationState): SimulationState {
+  // deep clone — jobs are referenced from many arrays; use JSON round-trip then rebuild Maps
+  const json = JSON.parse(JSON.stringify(state)) as SimulationState;
+  // re-link references: territories/regions hold COPIES of job objects, but UI doesn't depend on identity, so OK.
+  // For dispatch logic we still need to mutate the same job in jobs[] and in territory arrays — re-link by id.
+  const jobById = new Map(json.jobs.map((j) => [j.id, j]));
+  json.regions.forEach((r) => {
+    r.jobs = r.jobs.map((j) => jobById.get(j.id) ?? j);
+    r.territories.forEach((t) => {
+      t.jobs = t.jobs.map((j) => jobById.get(j.id) ?? j);
+      t.coreJobs = t.coreJobs.map((j) => jobById.get(j.id) ?? j);
+      t.reserveJobs = t.reserveJobs.map((j) => jobById.get(j.id) ?? j);
+      t.anchorJobs = t.anchorJobs.map((j) => jobById.get(j.id) ?? j);
+      t.borderJobs = t.borderJobs.map((j) => jobById.get(j.id) ?? j);
+      t.optimizedRoute = t.optimizedRoute.map((j) => jobById.get(j.id) ?? j);
+    });
+  });
+  json.territories = json.regions.flatMap((r) => r.territories);
+  return json;
+}
+
+function findTerritory(state: SimulationState, id: string | null) {
+  if (!id) return undefined;
+  return state.territories.find((t) => t.id === id);
+}
+
+function tryDispatch(
+  state: SimulationState,
+  installer: Installer,
+  workload: number,
+  dispatchType: DispatchType,
+  jobId?: string,
+): boolean {
+  if (installer.availableCapacity < workload) {
+    state.capacityBlocks++;
+    state.events.push({
+      kind: "CAPACITY_BLOCK",
+      t: ++state.tCounter,
+      installerId: installer.id,
+      required: workload,
+      available: installer.availableCapacity,
+      jobId,
+    });
+    return false;
+  }
+  installer.assignedWorkload += workload;
+  recomputeInstaller(installer);
+  state.dispatchMetrics[dispatchType]++;
+  return true;
+}
+
+function autoReserveFor(state: SimulationState, installer: Installer) {
+  let made = 0;
+  while (installer.eligible && made < CONFIG.AUTO_RESERVE_BATCH_LIMIT) {
+    const t = findTerritory(state, installer.territoryId);
+    if (!t || t.reserveJobs.length === 0) break;
+    const job = t.reserveJobs[0];
+    const ok = tryDispatch(state, installer, job.weight, "AUTO_RESERVE", job.id);
+    if (!ok) break;
+    t.reserveJobs.shift();
+    job.isCore = true;
+    job.isReserve = false;
+    t.coreJobs.push(job);
+    recomputeTerritory(t);
+    state.reserveAssignments.push({
+      id: `RA-${state.tCounter}`,
+      territoryId: t.id,
+      territoryOwner: t.ownerInstallerId,
+      assignedTo: installer.id,
+      dispatchType: "AUTO_RESERVE",
+      temporaryAssignment: installer.id !== t.ownerInstallerId,
+      reason: "INSTALLER_ELIGIBLE",
+      score: installer.availabilityScore,
+      jobIds: [job.id],
+      workload: job.weight,
+      createdAt: state.tCounter,
+    });
+    state.events.push({
+      kind: "AUTO_RESERVE",
+      t: ++state.tCounter,
+      installerId: installer.id,
+      jobId: job.id,
+      score: installer.availabilityScore,
+    });
+    made++;
+  }
+}
+
+function releaseReservesAllInstallers(state: SimulationState) {
+  state.installers.forEach((ins) => {
+    if (!ins.eligible) return;
+    const t = findTerritory(state, ins.territoryId);
+    if (!t || t.reserveJobs.length === 0) return;
+    const released = t.reserveJobs.splice(0, CONFIG.RESERVE_RELEASE_BATCH_SIZE);
+    released.forEach((j) => {
+      j.isReserve = false;
+      j.isCore = true;
+    });
+    t.coreJobs.push(...released);
+    ins.assignedWorkload = t.coreJobs.reduce((s, j) => s + j.weight, 0);
+    recomputeInstaller(ins);
+    recomputeTerritory(t);
+    state.events.push({
+      kind: "RESERVE_RELEASE",
+      t: ++state.tCounter,
+      installerId: ins.id,
+      territoryId: t.id,
+      jobIds: released.map((j) => j.id),
+    });
+  });
+}
+
+export function simulateCompletion(
+  prev: SimulationState,
+  installerId: string,
+  percent: number,
+): SimulationState {
+  const state = clone(prev);
+  const installer = state.installers.find((i) => i.id === installerId);
+  if (!installer) return state;
+  const completedDelta = installer.assignedWorkload * percent;
+  installer.completedWorkload = Math.min(
+    installer.assignedWorkload,
+    installer.completedWorkload + completedDelta,
+  );
+  recomputeInstaller(installer);
+  state.events.push({
+    kind: "COMPLETION",
+    t: ++state.tCounter,
+    installerId: installer.id,
+    completedWorkload: completedDelta,
+    remainingWorkload: installer.remainingWorkload,
+  });
+  if (installer.eligible) {
+    releaseReservesAllInstallers(state);
+    autoReserveFor(state, installer);
+  }
+  return state;
+}
+
+function findBestForPriority(state: SimulationState, regionId: string): {
+  installer: Installer | null;
+  path: DispatchPath;
+} {
+  const sameRegion = state.installers
+    .filter((i) => i.regionId === regionId)
+    .sort((a, b) => a.remainingWorkload - b.remainingWorkload)[0];
+  if (sameRegion) return { installer: sameRegion, path: "SAME_REGION" };
+
+  const region = state.regions.find((r) => r.id === regionId);
+  const neighbors = region?.neighbors ?? [];
+  const neighborInstaller = state.installers
+    .filter((i) => i.regionId && neighbors.includes(i.regionId))
+    .sort((a, b) => a.remainingWorkload - b.remainingWorkload)[0];
+  if (neighborInstaller) return { installer: neighborInstaller, path: "NEIGHBOR_REGION" };
+
+  const global = [...state.installers].sort(
+    (a, b) => a.remainingWorkload - b.remainingWorkload,
+  )[0];
+  return { installer: global ?? null, path: "GLOBAL" };
+}
+
+export function dispatchPriorityJob(
+  prev: SimulationState,
+  jobInput: {
+    id?: string;
+    regionId: string;
+    workload: number;
+    priorityLevel: PriorityLevel;
+  },
+): SimulationState {
+  const state = clone(prev);
+  const id = jobInput.id ?? `LIVE-${state.priorityAssignments.length + 1}`;
+  const job: Job = {
+    id,
+    category: "B",
+    weight: jobInput.workload,
+    avgHours: jobInput.workload * 4,
+    priority: true,
+    priorityLevel: jobInput.priorityLevel,
+    lat: state.regions.find((r) => r.id === jobInput.regionId)?.center.lat ?? state.center.lat,
+    lng: state.regions.find((r) => r.id === jobInput.regionId)?.center.lng ?? state.center.lng,
+    regionId: jobInput.regionId,
+    arrivalIndex: state.jobs.length + 1,
+    external: true,
+  };
+  state.jobs.push(job);
+  state.events.push({
+    kind: "JOB_ARRIVAL",
+    t: ++state.tCounter,
+    jobId: id,
+    priorityLevel: jobInput.priorityLevel,
+    regionId: jobInput.regionId,
+    workload: jobInput.workload,
+  });
+
+  const { installer, path } = findBestForPriority(state, jobInput.regionId);
+  if (!installer) return state;
+  const score = installer.availabilityScore;
+  const ok = tryDispatch(state, installer, jobInput.workload, "PRIORITY", id);
+  if (ok) {
+    state.priorityAssignments.push({
+      id: `PA-${state.tCounter}`,
+      jobId: id,
+      regionId: jobInput.regionId,
+      assignedTo: installer.id,
+      dispatchType: "PRIORITY",
+      dispatchPath: path,
+      priorityLevel: jobInput.priorityLevel,
+      workload: jobInput.workload,
+      score,
+      createdAt: state.tCounter,
+    });
+    state.events.push({
+      kind: "PRIORITY_DISPATCH",
+      t: ++state.tCounter,
+      jobId: id,
+      installerId: installer.id,
+      dispatchPath: path,
+      score,
+      regionId: jobInput.regionId,
+    });
+  }
+  return state;
+}
+
+export function manualReserveDispatch(prev: SimulationState): SimulationState {
+  const state = clone(prev);
+  const territoryMap = new Map(state.territories.map((t) => [t.id, t]));
+  state.regions.forEach((r) => {
+    r.territories.forEach((t) => {
+      if (t.reserveJobs.length === 0) return;
+      const ownerEligible = state.installers.find(
+        (i) => i.id === t.ownerInstallerId && i.eligible,
+      );
+      let best: Installer | null = ownerEligible ?? null;
+      let bestScore = best ? dispatchScore(best, t, territoryMap) : -Infinity;
+      if (!best) {
+        for (const ins of state.installers) {
+          if (!ins.eligible) continue;
+          if (ins.regionId !== t.regionId && !r.neighbors.includes(ins.regionId ?? "")) continue;
+          const sc = dispatchScore(ins, t, territoryMap);
+          if (sc > bestScore) {
+            bestScore = sc;
+            best = ins;
+          }
+        }
+      }
+      if (!best) return;
+      const released = t.reserveJobs.slice(0, CONFIG.RESERVE_RELEASE_BATCH_SIZE);
+      const wl = released.reduce((s, j) => s + j.weight, 0);
+      const ok = tryDispatch(state, best, wl, "RESERVE");
+      if (!ok) return;
+      t.reserveJobs.splice(0, released.length);
+      released.forEach((j) => {
+        j.isReserve = false;
+        j.isCore = true;
+      });
+      t.coreJobs.push(...released);
+      recomputeTerritory(t);
+      state.reserveAssignments.push({
+        id: `RA-${state.tCounter}`,
+        territoryId: t.id,
+        territoryOwner: t.ownerInstallerId,
+        assignedTo: best.id,
+        dispatchType: "RESERVE",
+        temporaryAssignment: best.id !== t.ownerInstallerId,
+        reason: "DISPATCH_SCORE",
+        score: bestScore,
+        jobIds: released.map((j) => j.id),
+        workload: wl,
+        createdAt: state.tCounter,
+      });
+      state.events.push({
+        kind: "RESERVE_DISPATCH",
+        t: ++state.tCounter,
+        territoryId: t.id,
+        installerId: best.id,
+        score: bestScore,
+        jobIds: released.map((j) => j.id),
+      });
+    });
+  });
+  return state;
+}
+
+export function summary(state: SimulationState) {
+  const ins = state.installers;
+  const totalAssigned = ins.reduce((s, i) => s + i.assignedWorkload, 0);
+  const totalCompleted = ins.reduce((s, i) => s + i.completedWorkload, 0);
+  const totalRemaining = ins.reduce((s, i) => s + i.remainingWorkload, 0);
+  const totalCapacity = ins.reduce((s, i) => s + i.shiftCapacity, 0);
+  const eligible = ins.filter((i) => i.eligible).length;
+  const overloaded = ins.filter((i) => i.capacityStatus === "FULL").length;
+  const warning = ins.filter((i) => i.capacityStatus === "WARNING").length;
+  const coreJobs = state.territories.reduce((s, t) => s + t.coreJobs.length, 0);
+  const reserveJobs = state.territories.reduce((s, t) => s + t.reserveJobs.length, 0);
+  const coreWorkload = state.territories.reduce((s, t) => s + t.coreWorkload, 0);
+  const reserveWorkload = state.territories.reduce((s, t) => s + t.reserveWorkload, 0);
+  const routeDistance = state.territories.reduce((s, t) => s + t.routeDistance, 0);
+  return {
+    totalAssigned,
+    totalCompleted,
+    totalRemaining,
+    totalCapacity,
+    capacityUtilization: totalCapacity > 0 ? totalAssigned / totalCapacity : 0,
+    eligible,
+    overloaded,
+    warning,
+    coreJobs,
+    reserveJobs,
+    coreWorkload,
+    reserveWorkload,
+    routeDistance,
   };
 }
